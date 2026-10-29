@@ -499,7 +499,7 @@ class Assets {
   chevrons: HTMLCanvasElement[] = [];
   nebula!: HTMLCanvasElement;
   stars: { p: number; list: Star[] }[] = [];
-  icons = new Map<StructureKind, string>();
+  private icons = new Map<string, string>();
 
   init() {
     if (this.ready) return;
@@ -518,7 +518,6 @@ class Assets {
     }
     this.nebula = makeNebula(1337);
     this.stars = makeStars(99);
-    for (const s of STRUCTURES) this.icons.set(s.kind, this.makeIcon(s.kind));
   }
 
   tile(kind: TileKind, variant: number) { return this.tiles.get(`${kind}${variant}`)!; }
@@ -560,13 +559,19 @@ class Assets {
     return url;
   }
 
-  private makeIcon(kind: StructureKind) {
-    const cv = document.createElement('canvas');
-    cv.width = 40; cv.height = 70;
-    const g = cv.getContext('2d')!;
-    g.drawImage(this.tile('plate', 3).color, 4, 34 - TILE_PAD);
-    g.drawImage(this.structure(kind, 0).color, 0, 0);
-    return cv.toDataURL();
+  /** Structure on a plate, in its owner's colours, for UI portraits. */
+  icon(kind: StructureKind, owner = 0) {
+    const key = `${kind}${owner}`;
+    let url = this.icons.get(key);
+    if (!url) {
+      const cv = document.createElement('canvas');
+      cv.width = 40; cv.height = 70;
+      const g = cv.getContext('2d')!;
+      g.drawImage(this.tile('plate', 3).color, 4, 34 - TILE_PAD);
+      g.drawImage(this.structure(kind, owner).color, 0, 0);
+      this.icons.set(key, (url = cv.toDataURL()));
+    }
+    return url;
   }
 }
 export const assets = new Assets();

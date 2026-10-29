@@ -58,7 +58,11 @@ export class Engine {
     if (at) {
       const h = at.startsWith('f') ? world.homes[Number(at.slice(1))] : null;
       const [c, r] = h ? [h.col, h.row] : at.split(',').map(Number);
-      if (Number.isFinite(c) && Number.isFinite(r)) { this.cam.x = tileX(c, r) + CX; this.cam.y = tileY(r) + CY; }
+      if (Number.isFinite(c) && Number.isFinite(r) && world.tile(c, r)) {
+        this.cam.x = tileX(c, r) + CX;
+        this.cam.y = tileY(r) + CY;
+        if (world.tile(c, r)!.kind !== 'void') this.select([c, r]);
+      }
     }
     if (q.get('zoom')) this.cam.zoom = this.cam.tz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(q.get('zoom')) || 3));
     this.bindInput();
@@ -115,26 +119,28 @@ export class Engine {
     const { world } = this;
     if (this.mini && this.mini.v === world.version) return this.mini.cv;
     const cv = this.mini?.cv ?? document.createElement('canvas');
-    cv.width = world.cols * 4 + 2;
-    cv.height = world.rows * 3 + 1;
+    // 3x2 map pixels per hex keeps the world's aspect ratio (32x21 px tiles).
+    cv.width = world.cols * 3 + 2;
+    cv.height = world.rows * 2;
     const g = cv.getContext('2d')!;
     g.clearRect(0, 0, cv.width, cv.height);
     for (const t of world.tiles) {
       if (t.kind === 'void') continue;
-      const x = t.col * 4 + (t.row & 1) * 2, y = t.row * 3;
+      const x = t.col * 3 + (t.row & 1), y = t.row * 2;
       let border = false;
       if (t.owner >= 0) for (let d = 0; d < 6; d++) if (world.tile(...neighbor(t.col, t.row, d))?.owner !== t.owner) border = true;
       g.fillStyle = MINI_COLORS[t.kind];
-      g.fillRect(x, y, 4, 3);
+      g.fillRect(x, y, 3, 2);
       if (t.owner >= 0) {
         g.globalAlpha = border ? 0.95 : 0.32;
         g.fillStyle = FACTIONS[t.owner].color;
-        g.fillRect(x, y, 4, 3);
+        g.fillRect(x, y, 3, 2);
         g.globalAlpha = 1;
       }
       if (t.structure) {
-        g.fillStyle = t.structure.kind === 'nexus' ? '#ffffff' : FACTIONS[t.structure.owner].color;
-        g.fillRect(x + 1, y, 2, 2);
+        const nexus = t.structure.kind === 'nexus';
+        g.fillStyle = nexus ? '#ffffff' : FACTIONS[t.structure.owner].color;
+        g.fillRect(x + 1, y, nexus ? 2 : 1, nexus ? 2 : 1);
       }
     }
     this.mini = { cv, v: world.version };

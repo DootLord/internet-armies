@@ -10,7 +10,7 @@ export function Tooltip() {
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
-      if (ref.current) ref.current.style.transform = `translate(${e.clientX + 18}px, ${e.clientY + 16}px)`;
+      if (ref.current) ref.current.style.transform = `translate(${e.clientX + 18}px, ${e.clientY + 18}px)`;
     };
     window.addEventListener('pointermove', move);
     return () => window.removeEventListener('pointermove', move);
@@ -19,16 +19,14 @@ export function Tooltip() {
   const owner = hover && hover.owner >= 0 ? FACTIONS[hover.owner] : null;
   const s = hover?.structure;
   return (
-    <div ref={ref} className={`tooltip ${hover ? 'show' : ''}`}>
+    <div ref={ref} className={`tooltip f-tip ${hover ? 'show' : ''}`}>
       {hover && (
         <>
-          <div className="tt-title">{s ? STRUCT[s.kind].name : TILE_INFO[hover.kind].name}</div>
-          <div className="tt-row">
-            <span>⟨{hover.col},{hover.row}⟩</span>
-            {owner ? <span style={{ color: owner.color }}>{owner.tag}</span> : <span className="dim">UNCLAIMED</span>}
-          </div>
-          {s && s.progress < 1 && <div className="tt-row dim">Fabricating {Math.round(s.progress * 100)}%</div>}
-          {mode && <div className={`tt-build ${hover.ok ? 'ok' : 'bad'}`}>{hover.ok ? `Place ${STRUCT[mode].name}` : hover.reason}</div>}
+          <b>{s ? STRUCT[s.kind].name : TILE_INFO[hover.kind].name}</b>
+          <span className="muted">
+            {owner ? <span style={{ color: owner.color }}>{owner.name}</span> : 'Unclaimed'} · {hover.col}, {hover.row}
+          </span>
+          {mode && <span className={hover.ok ? 'ok' : 'bad'}>{hover.ok ? `Place ${STRUCT[mode].name}` : hover.reason}</span>}
         </>
       )}
     </div>
@@ -39,10 +37,8 @@ export function BuildBanner() {
   const mode = useStore(hud, (s) => s.buildMode);
   if (!mode) return null;
   return (
-    <div className="build-banner">
-      <span className="bb-pulse" />
-      PLACING <b>{STRUCT[mode].name}</b>
-      <span className="dim">· highlighted sectors are valid · ESC to cancel</span>
+    <div className="banner f-tip">
+      Placing <b>{STRUCT[mode].name}</b> <span className="muted">Right-click or Esc to cancel · Shift to place several</span>
     </div>
   );
 }
@@ -56,18 +52,6 @@ export function Toasts() {
           {t.text}
         </div>
       ))}
-    </div>
-  );
-}
-
-export function KeyHints() {
-  return (
-    <div className="keyhints">
-      <span><kbd>WASD</kbd> pan</span>
-      <span><kbd>Wheel</kbd> zoom</span>
-      <span><kbd>1-7</kbd> build</span>
-      <span><kbd>H</kbd> home</span>
-      <span><kbd>Esc</kbd> cancel</span>
     </div>
   );
 }

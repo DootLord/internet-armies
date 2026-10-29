@@ -8,31 +8,31 @@ export function BuildDock() {
   const mode = useStore(hud, (s) => s.buildMode);
   const res = useStore(hud, (s) => s.res);
   return (
-    <section className="build panel">
-      <div className="ph">
-        <span className="ph-title">Fabrication</span>
-        <span className="ph-meta">{mode ? 'RMB / ESC TO CANCEL' : 'SHIFT-CLICK TO CHAIN'}</span>
-      </div>
+    <section className="build f-panel">
       <div className="build-grid">
         {BUILDABLE.map((d, i) => {
           const afford = RES_KEYS.every((k) => res[k] >= (d.cost[k] ?? 0));
           return (
             <button
               key={d.kind}
-              className={`build-card ${mode === d.kind ? 'active' : ''} ${afford ? '' : 'poor'}`}
+              className={`pbtn card ${mode === d.kind ? 'on' : ''} ${afford ? '' : 'poor'}`}
               onClick={() => getEngine()?.setBuildMode(mode === d.kind ? null : d.kind)}
-              title={`${d.name} — ${d.desc}`}
             >
-              <span className="hotkey">{i + 1}</span>
-              <img src={assets.icons.get(d.kind)} alt="" draggable={false} />
-              <span className="bc-name">{d.name}</span>
-              <span className="bc-cost">
-                {RES_KEYS.filter((k) => d.cost[k]).map((k) => (
-                  <span key={k} className={res[k] >= d.cost[k]! ? '' : 'short'}>
-                    <ResIcon k={k} size={10} />
-                    {d.cost[k]}
-                  </span>
-                ))}
+              <kbd className="card-key">{i + 1}</kbd>
+              <img src={assets.icon(d.kind)} alt="" draggable={false} />
+              <span className="card-name">{d.name}</span>
+              <span className="card-tip f-tip">
+                <b>{d.name}</b>
+                <span className="muted">{d.desc}</span>
+                <span className="card-cost">
+                  {RES_KEYS.filter((k) => d.cost[k]).map((k) => (
+                    <span key={k} className={res[k] >= d.cost[k]! ? '' : 'short'}>
+                      <ResIcon k={k} size={12} />
+                      {d.cost[k]}
+                    </span>
+                  ))}
+                  <span className="muted">{d.buildTime}s</span>
+                </span>
               </span>
             </button>
           );

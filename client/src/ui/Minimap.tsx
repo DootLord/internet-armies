@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { FACTIONS } from '../game/defs';
-import { getEngine, hud, world } from '../game/game';
+import { getEngine, hud } from '../game/game';
 import { useStore } from '../game/store';
+import { UiIcon } from './icons';
 
-// Minimap pixels per world pixel (tile 32x21 world px -> 4x3 map px).
-const SX = 4 / 32, SY = 3 / 21;
+// Minimap pixels per world pixel (tile 32x21 world px -> 3x2 map px).
+const SX = 3 / 32, SY = 2 / 21;
 
 export function Minimap() {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -22,7 +22,7 @@ export function Minimap() {
       g.clearRect(0, 0, cv.width, cv.height);
       g.drawImage(base, 0, 0);
       const v = eng.getView();
-      g.strokeStyle = 'rgba(223,246,255,0.9)';
+      g.strokeStyle = '#dff6ff';
       g.lineWidth = 1;
       g.strokeRect(Math.round(v.x * SX) + 0.5, Math.round(v.y * SY) + 0.5, Math.round(v.w * SX), Math.round(v.h * SY));
     };
@@ -31,33 +31,27 @@ export function Minimap() {
   }, []);
 
   const jump = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.buttons !== 1 && e.type !== 'pointerdown') return;
+    if (e.buttons !== 1) return;
     const cv = e.currentTarget, r = cv.getBoundingClientRect();
-    const mx = ((e.clientX - r.left) / r.width) * cv.width, my = ((e.clientY - r.top) / r.height) * cv.height;
-    getEngine()?.centerOn(mx / SX, my / SY);
+    getEngine()?.centerOn((((e.clientX - r.left) / r.width) * cv.width) / SX, (((e.clientY - r.top) / r.height) * cv.height) / SY);
   };
 
   return (
-    <section className="minimap panel">
-      <div className="ph">
-        <span className="ph-title">Tactical Map</span>
-        <span className="ph-meta">{world.cols}×{world.rows}</span>
-      </div>
-      <div className="mm-frame">
+    <section className="minimap f-panel">
+      <div className="mm-well f-inset">
         <canvas ref={ref} className="mm-canvas" onPointerDown={jump} onPointerMove={jump} />
       </div>
-      <div className="mm-foot">
-        <div className="mm-legend">
-          {FACTIONS.map((f) => (
-            <i key={f.id} style={{ background: f.color }} title={f.name} />
-          ))}
-        </div>
-        <div className="zoom-ctl">
-          <button onClick={() => getEngine()?.setZoom(zoom - 1)} aria-label="Zoom out">−</button>
-          <span className="num">{zoom.toFixed(1)}x</span>
-          <button onClick={() => getEngine()?.setZoom(zoom + 1)} aria-label="Zoom in">+</button>
-          <button onClick={() => getEngine()?.goHome()} title="Return to Nexus (H)">⌂</button>
-        </div>
+      <div className="mm-tools">
+        <button className="pbtn icon" onClick={() => getEngine()?.goHome()} title="Return to Nexus (H)">
+          <UiIcon name="home" />
+        </button>
+        <span className="mm-zoom num">{zoom.toFixed(1)}×</span>
+        <button className="pbtn icon" onClick={() => getEngine()?.setZoom(zoom - 1)} title="Zoom out (−)">
+          <UiIcon name="minus" />
+        </button>
+        <button className="pbtn icon" onClick={() => getEngine()?.setZoom(zoom + 1)} title="Zoom in (+)">
+          <UiIcon name="plus" />
+        </button>
       </div>
     </section>
   );

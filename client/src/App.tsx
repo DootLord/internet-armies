@@ -4,9 +4,12 @@ import { hud, setEngine, world } from './game/game';
 import { BuildDock } from './ui/BuildDock';
 import { Feed } from './ui/Feed';
 import { Minimap } from './ui/Minimap';
-import { BuildBanner, KeyHints, Toasts, Tooltip } from './ui/Overlays';
+import { BuildBanner, Toasts, Tooltip } from './ui/Overlays';
 import { SelectionPanel } from './ui/SelectionPanel';
+import { installSkin } from './ui/skin';
 import { TopBar } from './ui/TopBar';
+
+installSkin();
 
 export function App() {
   const host = useRef<HTMLDivElement>(null);
@@ -41,7 +44,6 @@ export function App() {
           <Minimap />
           <SelectionPanel />
           <BuildDock />
-          <KeyHints />
           <Tooltip />
         </div>
       )}

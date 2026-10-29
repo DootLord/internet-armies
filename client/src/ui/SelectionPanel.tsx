@@ -4,15 +4,31 @@ import { assets } from '../game/sprites';
 import { useStore } from '../game/store';
 import { ResIcon } from './icons';
 
+const CONTROLS: [string, string][] = [
+  ['Drag', 'Pan'],
+  ['Wheel', 'Zoom'],
+  ['1–7', 'Build'],
+  ['H', 'Home'],
+  ['Esc', 'Cancel'],
+];
+
 export function SelectionPanel() {
   const sel = useStore(hud, (s) => s.selected);
+
   if (!sel) {
     return (
-      <section className="selection panel empty">
-        <span className="hint">Select a sector to inspect it · Drag to pan · Scroll to zoom</span>
+      <section className="selection f-panel idle">
+        <div className="controls">
+          {CONTROLS.map(([k, v]) => (
+            <span key={k}>
+              <kbd>{k}</kbd> {v}
+            </span>
+          ))}
+        </div>
       </section>
     );
   }
+
   const tile = TILE_INFO[sel.kind];
   const s = sel.structure;
   const def = s && STRUCT[s.kind];
@@ -21,70 +37,53 @@ export function SelectionPanel() {
   const mine = s?.owner === PLAYER;
 
   return (
-    <section className="selection panel" style={{ ['--fc' as string]: owner?.color ?? '#8698b4' }}>
-      <div className="sel-portrait">
-        <img src={def ? assets.icons.get(s!.kind) : assets.tileIcon(sel.kind, sel.variant)} alt="" />
+    <section className="selection f-panel">
+      <div className="portrait f-inset">
+        <img src={def ? assets.icon(s!.kind, s!.owner) : assets.tileIcon(sel.kind, sel.variant)} alt="" />
       </div>
       <div className="sel-body">
-        <div className="sel-head">
-          <div>
-            <div className="sel-kicker">
-              {def ? def.role : 'Sector'} · ⟨{sel.col},{sel.row}⟩ · {tile.name}
-            </div>
-            <h2 className="sel-title">{def ? def.name : tile.name}</h2>
-          </div>
-          <div className="owner-chip">
-            {owner ? (
-              <>
-                <i style={{ background: owner.color }} />
-                {owner.name}
-              </>
-            ) : (
-              'Unclaimed'
-            )}
-          </div>
+        <h2 className="sel-title">{def ? def.name : tile.name}</h2>
+        <div className="sel-meta">
+          {owner ? <span style={{ color: owner.color }}>{owner.name}</span> : <span className="muted">Unclaimed</span>}
+          <span className="muted">
+            {def ? tile.name : 'Sector'} {sel.col}, {sel.row}
+          </span>
         </div>
-        <p className="sel-desc">{def ? def.desc : tile.desc}</p>
 
-        {s && s.progress < 1 && (
-          <div className="progress">
-            <div className="progress-bar" style={{ width: `${s.progress * 100}%` }} />
-            <span>FABRICATING · {Math.round(s.progress * 100)}% · {Math.ceil((1 - s.progress) * def!.buildTime)}s</span>
+        {s && s.progress < 1 ? (
+          <div className="bar f-inset">
+            <div className="bar-fill" style={{ width: `${s.progress * 100}%`, background: owner?.color }} />
+            <span className="bar-text">Building · {Math.ceil((1 - s.progress) * def!.buildTime)}s</span>
           </div>
+        ) : (
+          <p className="sel-desc">{def ? def.desc : tile.desc}</p>
         )}
 
-        <div className="sel-stats">
-          {produce &&
-            RES_KEYS.filter((k) => produce[k]).map((k) => (
-              <span key={k} className={`stat ${produce[k]! > 0 ? 'up' : 'down'}`}>
-                <ResIcon k={k} size={14} />
-                {produce[k]! > 0 ? '+' : ''}
-                {produce[k]}/s
-              </span>
-            ))}
-          {!s && tile.deposit &&
-            RES_KEYS.filter((k) => tile.deposit![k]).map((k) => (
-              <span key={k} className="stat deposit">
-                <ResIcon k={k} size={14} /> Deposit +{tile.deposit![k]}/s
-              </span>
-            ))}
-          {s && <span className="stat">LV {s.level}</span>}
-        </div>
-
-        {mine && (
-          <div className="sel-actions">
-            <button className="btn" disabled title="Coming soon">
-              Upgrade
+        <div className="sel-foot">
+          <div className="yields">
+            {produce &&
+              RES_KEYS.filter((k) => produce[k]).map((k) => (
+                <span key={k} className={produce[k]! > 0 ? 'up' : 'down'}>
+                  <ResIcon k={k} size={12} />
+                  {produce[k]! > 0 ? '+' : ''}
+                  {produce[k]}
+                </span>
+              ))}
+            {!s &&
+              tile.deposit &&
+              RES_KEYS.filter((k) => tile.deposit![k]).map((k) => (
+                <span key={k} className="up">
+                  <ResIcon k={k} size={12} />+{tile.deposit![k]} if mined
+                </span>
+              ))}
+            {!s && sel.owner === -1 && world.isAdjacentTo(sel.col, sel.row, PLAYER) && <span className="hint">Frontier: a Claim Relay here expands your borders</span>}
+          </div>
+          {mine && s!.kind !== 'nexus' && (
+            <button className="pbtn danger" onClick={() => getEngine()?.demolishSelected()}>
+              Demolish
             </button>
-            {s!.kind !== 'nexus' && (
-              <button className="btn danger" onClick={() => getEngine()?.demolishSelected()}>
-                Decommission
-              </button>
-            )}
-          </div>
-        )}
-        {!s && sel.owner === PLAYER && <div className="sel-tip">Open sector. Pick a structure from Fabrication to build here.</div>}
-        {!s && sel.owner === -1 && world.isAdjacentTo(sel.col, sel.row, PLAYER) && <div className="sel-tip">Frontier sector. A Claim Relay here would extend your borders.</div>}
+          )}
+        </div>
       </div>
     </section>
   );

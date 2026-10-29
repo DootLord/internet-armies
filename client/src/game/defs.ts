@@ -42,7 +42,7 @@ export interface StructureDef {
 }
 
 export const STRUCTURES: StructureDef[] = [
-  { kind: 'nexus', name: 'Command Nexus', role: 'Core', desc: 'The heart of your holdings. Claims surrounding sectors.', cost: {}, buildTime: 1, place: 'none', produce: () => ({ credits: 4, alloy: 2, energy: 6 }), claim: 3, light: 70 },
+  { kind: 'nexus', name: 'Command Nexus', role: 'Core', desc: "A faction's seat of power. Claims the surrounding sectors.", cost: {}, buildTime: 1, place: 'none', produce: () => ({ credits: 4, alloy: 2, energy: 6 }), claim: 3, light: 70 },
   { kind: 'extractor', name: 'Deep Extractor', role: 'Economy', desc: 'Drills deposits for alloy, crystal or energy.', cost: { credits: 120, alloy: 40 }, buildTime: 10, place: 'deposit', produce: (t) => ({ ...TILE_INFO[t].deposit, energy: (TILE_INFO[t].deposit?.energy ?? 0) - 1 }), light: 40 },
   { kind: 'solar', name: 'Solar Array', role: 'Power', desc: 'Harvests starlight. Cheap, reliable energy.', cost: { credits: 80, alloy: 30 }, buildTime: 7, place: 'owned', produce: () => ({ energy: 4 }), light: 34 },
   { kind: 'habitat', name: 'Habitat Ring', role: 'Economy', desc: 'Houses crews and generates credits.', cost: { credits: 150, alloy: 80 }, buildTime: 14, place: 'owned', produce: () => ({ credits: 5, energy: -2 }), light: 48 },
