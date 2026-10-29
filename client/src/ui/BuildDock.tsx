@@ -1,8 +1,8 @@
 import { BUILDABLE, RES_KEYS } from '../game/defs';
 import { getEngine, hud } from '../game/game';
-import { assets } from '../game/sprites';
 import { useStore } from '../game/store';
 import { ResIcon } from './icons';
+import { SpriteIcon } from './SpriteIcon';
 
 export function BuildDock() {
   const mode = useStore(hud, (s) => s.buildMode);
@@ -19,7 +19,7 @@ export function BuildDock() {
               onClick={() => getEngine()?.setBuildMode(mode === d.kind ? null : d.kind)}
             >
               <kbd className="card-key">{i + 1}</kbd>
-              <img src={assets.icon(d.kind)} alt="" draggable={false} />
+              <SpriteIcon kind={d.kind} k={0.5} />
               <span className="card-name">{d.name}</span>
               <span className="card-tip f-tip">
                 <b>{d.name}</b>

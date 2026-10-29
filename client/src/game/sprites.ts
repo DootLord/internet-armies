@@ -559,16 +559,36 @@ class Assets {
     return url;
   }
 
-  /** Structure on a plate, in its owner's colours, for UI portraits. */
-  icon(kind: StructureKind, owner = 0) {
-    const key = `${kind}${owner}`;
+  /**
+   * Structure on a plate, in its owner's colours, for UI portraits. Same layer
+   * split as the world: 'color', 'emit', 'shine' (glint mask), plus 'bloom':
+   * the emit layer pre-blurred and summed, standing in for the WebGL bloom pass.
+   */
+  icon(kind: StructureKind, owner = 0, layer: 'color' | 'emit' | 'shine' | 'bloom' = 'color') {
+    const key = `${kind}${owner}${layer}`;
     let url = this.icons.get(key);
     if (!url) {
       const cv = document.createElement('canvas');
       cv.width = 40; cv.height = 70;
       const g = cv.getContext('2d')!;
-      g.drawImage(this.tile('plate', 3).color, 4, 34 - TILE_PAD);
-      g.drawImage(this.structure(kind, owner).color, 0, 0);
+      const tile = this.tile('plate', 3), s = this.structure(kind, owner);
+      if (layer === 'bloom') {
+        // Two radii summed additively, like the dual-kawase chain in post.ts.
+        const emit = document.createElement('canvas');
+        emit.width = 40; emit.height = 70;
+        const eg = emit.getContext('2d')!;
+        if (tile.emit) eg.drawImage(tile.emit, 4, 34 - TILE_PAD);
+        eg.drawImage(s.emit, 0, 0);
+        g.globalCompositeOperation = 'lighter';
+        for (const [blur, passes] of [[1, 3], [3, 3]]) {
+          g.filter = `blur(${blur}px)`;
+          for (let i = 0; i < passes; i++) g.drawImage(emit, 0, 0);
+        }
+      } else {
+        if (layer === 'color') g.drawImage(tile.color, 4, 34 - TILE_PAD);
+        if (layer === 'emit' && tile.emit) g.drawImage(tile.emit, 4, 34 - TILE_PAD);
+        g.drawImage(s[layer], 0, 0);
+      }
       this.icons.set(key, (url = cv.toDataURL()));
     }
     return url;

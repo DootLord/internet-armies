@@ -3,6 +3,7 @@ import { getEngine, hud, world } from '../game/game';
 import { assets } from '../game/sprites';
 import { useStore } from '../game/store';
 import { ResIcon } from './icons';
+import { SpriteIcon } from './SpriteIcon';
 
 const CONTROLS: [string, string][] = [
   ['Drag', 'Pan'],
@@ -39,7 +40,7 @@ export function SelectionPanel() {
   return (
     <section className="selection f-panel">
       <div className="portrait f-inset">
-        <img src={def ? assets.icon(s!.kind, s!.owner) : assets.tileIcon(sel.kind, sel.variant)} alt="" />
+        {def ? <SpriteIcon key={`${s!.kind}${s!.owner}`} kind={s!.kind} owner={s!.owner} k={1} glint="loop" /> : <img src={assets.tileIcon(sel.kind, sel.variant)} alt="" />}
       </div>
       <div className="sel-body">
         <h2 className="sel-title">{def ? def.name : tile.name}</h2>

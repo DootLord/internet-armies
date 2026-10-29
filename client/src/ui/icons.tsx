@@ -2,10 +2,17 @@ import { ResKey } from '../game/defs';
 
 // Pixel glyphs: each char indexes the palette ('.' = empty). Rendered as SVG rects
 // so they stay crisp at any integer scale.
-function Glyph({ rows, pal, size }: { rows: string[]; pal: Record<string, string>; size: number }) {
+function Glyph({ rows, pal, size, glow }: { rows: string[]; pal: Record<string, string>; size: number; glow?: string }) {
   const w = rows[0].length, h = rows.length;
   return (
-    <svg width={size * (w / h)} height={size} viewBox={`0 0 ${w} ${h}`} shapeRendering="crispEdges" className="glyph">
+    <svg
+      width={size * (w / h)}
+      height={size}
+      viewBox={`0 0 ${w} ${h}`}
+      shapeRendering="crispEdges"
+      className="glyph"
+      style={glow ? { filter: `drop-shadow(0 0 2px ${glow}99) drop-shadow(0 0 5px ${glow}55)` } : undefined}
+    >
       {rows.flatMap((row, y) => [...row].map((ch, x) => (pal[ch] ? <rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill={pal[ch]} /> : null)))}
     </svg>
   );
@@ -30,8 +37,8 @@ const RES: Record<ResKey, { rows: string[]; pal: Record<string, string> }> = {
   },
 };
 
-export function ResIcon({ k, size = 14 }: { k: ResKey; size?: number }) {
-  return <Glyph rows={RES[k].rows} pal={RES[k].pal} size={size} />;
+export function ResIcon({ k, size = 14, glow = false }: { k: ResKey; size?: number; glow?: boolean }) {
+  return <Glyph rows={RES[k].rows} pal={RES[k].pal} size={size} glow={glow ? RES[k].pal['2'] : undefined} />;
 }
 
 const UI_GLYPHS = {

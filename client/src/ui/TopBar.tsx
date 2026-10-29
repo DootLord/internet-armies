@@ -9,8 +9,8 @@ function Resource({ k }: { k: ResKey }) {
   const v = useStore(hud, (s) => s.res[k]);
   const r = useStore(hud, (s) => s.rates[k]);
   return (
-    <div className="res f-inset" title={`${RES_INFO[k].name} · ${r >= 0 ? '+' : ''}${r} per second`}>
-      <ResIcon k={k} size={14} />
+    <div className="res f-well" title={`${RES_INFO[k].name} · ${r >= 0 ? '+' : ''}${r} per second`}>
+      <ResIcon k={k} size={14} glow />
       <span className="res-num">{fmt(v)}</span>
       <span className={`res-rate ${r > 0 ? 'up' : r < 0 ? 'down' : ''}`}>
         {r > 0 ? '+' : ''}
@@ -25,13 +25,12 @@ export function TopBar() {
   const sectors = useStore(hud, (s) => s.sectors);
   const me = FACTIONS[PLAYER];
   return (
-    <header className="topbar f-panel">
+    <header className="topbar f-strip">
       <div className="who">
-        <Emblem color={me.color} size={27} />
-        <div>
-          <div className="who-name">{me.name}</div>
-          <div className="who-sub">Kestrel Cluster</div>
-        </div>
+        <Emblem color={me.color} size={18} />
+        <span className="who-name" style={{ color: me.color }}>
+          {me.name}
+        </span>
       </div>
       <div className="res-row">
         {RES_KEYS.map((k) => (
@@ -39,11 +38,12 @@ export function TopBar() {
         ))}
       </div>
       <div className="clock">
+        <span className="muted">Kestrel Cluster</span>
         <span>
-          <span className="k">Sectors</span> <span className="num">{sectors}</span>
+          <span className="muted">Sectors</span> <span className="num">{sectors}</span>
         </span>
         <span>
-          <span className="k">Cycle</span> <span className="num">{cycle}</span>
+          <span className="muted">Cycle</span> <span className="num">{cycle}</span>
         </span>
       </div>
     </header>

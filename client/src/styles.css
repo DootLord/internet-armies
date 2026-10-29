@@ -33,15 +33,57 @@ b { font-weight: 400; color: var(--hi); }
 .hud > .log, .hud > .toasts, .hud > .banner { pointer-events: none; }
 
 /* ------------------------------------------------------------ pixel frames */
-.f-panel, .f-inset, .f-tip, .pbtn { image-rendering: pixelated; border-style: solid; }
-.f-panel { border-width: calc(8 * var(--u)); border-image: var(--f-panel) 8 fill / calc(8 * var(--u)) stretch; }
-.f-inset { border-width: calc(4 * var(--u)); border-image: var(--f-inset) 4 fill / calc(4 * var(--u)) stretch; }
-.f-tip { border-width: calc(3 * var(--u)); border-image: var(--f-tip) 3 fill / calc(3 * var(--u)) stretch; }
-.pbtn { border-width: calc(4 * var(--u)); border-image: var(--f-btn) 4 fill / calc(4 * var(--u)) stretch; }
-.pbtn:hover { border-image-source: var(--f-btn-hover); }
-.pbtn:active, .pbtn.on:active { border-image-source: var(--f-btn-down); }
+/* Each frame class sets: --bw border width, --sl slice, --fi image, --fs shine
+   mask, --fg emissive layer (see ui/skin.ts). */
+.f-panel, .f-strip, .f-inset, .f-well, .f-tip, .pbtn {
+  image-rendering: pixelated;
+  border-style: solid;
+  border-width: var(--bw);
+  border-image: var(--fi) var(--sl) fill / var(--bw) stretch;
+}
+.f-panel { --bw: calc(8 * var(--u)); --sl: 8; --fi: var(--f-panel); --fs: var(--fs-panel); --fg: var(--fg-panel); }
+.f-strip { --bw: calc(4 * var(--u)); --sl: 4; --fi: var(--f-strip); --fs: var(--fs-strip); --fg: var(--fg-strip); --band: 1.2%; }
+.f-inset { --bw: calc(4 * var(--u)); --sl: 4; --fi: var(--f-inset); position: relative; }
+.f-well { --bw: calc(2 * var(--u)); --sl: 2; --fi: var(--f-well); position: relative; }
+.f-tip { --bw: calc(3 * var(--u)); --sl: 3; --fi: var(--f-tip); }
+.pbtn { --bw: calc(4 * var(--u)); --sl: 4; --fi: var(--f-btn); --fs: var(--fs-btn); position: relative; }
+.pbtn:hover { --fi: var(--f-btn-hover); --fs: var(--fs-btn-hover); }
+.pbtn:active, .pbtn.on:active { --fi: var(--f-btn-down); }
 .pbtn:active > * { transform: translateY(var(--u)); }
-.pbtn.on { border-image-source: var(--f-btn-on); }
+.pbtn.on { --fi: var(--f-btn-on); --fs: var(--fs-btn-on); --fg: var(--fg-btn-on); }
+
+/* Specular sweep (::before) and bloom (::after), mirroring the world's shine
+   pass and emissive layer. */
+.f-panel::before, .f-strip::before, .pbtn::before,
+.f-panel::after, .f-strip::after, .pbtn.on::after {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--bw));
+  pointer-events: none;
+  border: var(--bw) solid transparent;
+  border-image-slice: var(--sl);
+  border-image-width: var(--bw);
+  image-rendering: pixelated;
+}
+.f-panel::before, .f-strip::before, .pbtn::before {
+  --band-mask: linear-gradient(100deg, transparent calc(50% - var(--band, 6%)), #000 50%, transparent calc(50% + var(--band, 6%)));
+  border-image-source: var(--fs);
+  -webkit-mask: var(--band-mask) 100% 0 / 300% 100% no-repeat;
+  mask: var(--band-mask) 100% 0 / 300% 100% no-repeat;
+  opacity: 0.8;
+}
+.f-panel::before, .f-strip::before { animation: sweep 10s steps(60) var(--sweep-delay, 0s) infinite; }
+.pbtn:hover::before { animation: sweep-once 0.5s steps(10); }
+.f-panel::after, .f-strip::after, .pbtn.on::after {
+  border-image-source: var(--fg);
+  filter: drop-shadow(0 0 calc(1.5 * var(--u)) var(--glowc)) drop-shadow(0 0 calc(5 * var(--u)) var(--glowc));
+  animation: pulse 2.8s ease-in-out infinite;
+}
+:root { --glowc: rgba(73, 224, 255, 0.85); }
+.topbar { --sweep-delay: 0s; }
+.minimap { --sweep-delay: 2.5s; }
+.selection { --sweep-delay: 5s; }
+.build { --sweep-delay: 7.5s; }
 .pbtn.icon { width: calc(15 * var(--u)); height: calc(15 * var(--u)); display: grid; place-items: center; }
 .pbtn.danger { color: var(--bad); padding: 0 calc(3 * var(--u)); height: calc(15 * var(--u)); }
 
@@ -64,24 +106,22 @@ kbd {
   display: flex;
   align-items: center;
   gap: calc(8 * var(--u));
-  padding: 0 calc(4 * var(--u));
+  padding: var(--u) calc(6 * var(--u));
 }
-.who { display: flex; align-items: center; gap: calc(4 * var(--u)); min-width: 0; }
-.who-name { color: var(--hi); white-space: nowrap; }
-.who-sub { font-size: 16px; color: var(--muted); white-space: nowrap; }
+.who { display: flex; align-items: center; gap: calc(3 * var(--u)); min-width: 0; }
+.who-name { white-space: nowrap; text-shadow: 0 0 calc(4 * var(--u)); }
 .res-row { display: flex; gap: calc(2 * var(--u)); margin: 0 auto; }
-.res { display: flex; align-items: center; gap: calc(3 * var(--u)); padding: 0 calc(3 * var(--u)); height: calc(14 * var(--u)); min-width: calc(58 * var(--u)); }
+.res { display: flex; align-items: center; gap: calc(3 * var(--u)); padding: 0 calc(3 * var(--u)); height: calc(12 * var(--u)); min-width: calc(58 * var(--u)); }
 .res-num { font-family: var(--num); color: var(--hi); flex: 1; }
 .res-rate { font-family: var(--num); font-size: 12px; color: var(--muted); }
 .res-rate.up { color: var(--good); }
 .res-rate.down { color: var(--bad); }
 .clock { display: flex; gap: calc(8 * var(--u)); white-space: nowrap; }
-.clock .k { color: var(--muted); }
 
 /* ------------------------------------------------------------ message log */
 .log {
   position: absolute;
-  top: calc(34 * var(--u));
+  top: calc(23 * var(--u));
   right: calc(6 * var(--u));
   width: min(420px, 40vw);
   margin: 0;
@@ -95,7 +135,7 @@ kbd {
 .log-line { pointer-events: auto; line-height: 1.25; }
 .log-line.link { cursor: pointer; }
 .log-line.link:hover { color: var(--hi); }
-.log-line.sys { color: var(--acc); }
+.log-line.sys { color: var(--acc); text-shadow: var(--outline), 0 0 calc(4 * var(--u)) rgba(73, 224, 255, 0.5); }
 
 /* ------------------------------------------------------------ bottom console */
 .minimap, .selection, .build { position: absolute; bottom: calc(-4 * var(--u)); }
@@ -109,8 +149,22 @@ kbd {
 .build { right: calc(-4 * var(--u)); padding: 0 calc(2 * var(--u)) calc(2 * var(--u)) 0; }
 .build-grid { display: flex; gap: calc(2 * var(--u)); }
 .card { position: relative; display: flex; flex-direction: column; align-items: center; padding: 0 calc(var(--u)); }
-.card img { width: calc(40 * var(--u) / 2); height: calc(70 * var(--u) / 2); image-rendering: pixelated; display: block; }
-.card.poor img { filter: grayscale(1) brightness(0.55); }
+.card.poor .sprite { filter: grayscale(1) brightness(0.55); }
+
+/* Structure portrait: colour + emissive + bloom + glint, like the world. */
+.sprite { position: relative; display: block; width: calc(40 * var(--u) * var(--k)); height: calc(70 * var(--u) * var(--k)); }
+.sprite > * { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.sprite .emit { mix-blend-mode: screen; }
+/* Bloom is pre-blurred; sample it smoothly (it's light, not pixels). */
+.sprite .bloom { image-rendering: auto; mix-blend-mode: screen; animation: pulse 2.8s ease-in-out infinite; }
+.sprite .glint {
+  background: linear-gradient(100deg, transparent 44%, rgba(255, 255, 255, 0.95) 50%, transparent 56%) 100% 0 / 300% 100% no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+  mix-blend-mode: screen;
+}
+.glint-loop .glint { animation: glint 6s steps(36) 0.4s infinite; }
+.card:hover .glint { animation: glint-once 0.6s steps(12); }
 .card-key { position: absolute; top: calc(-2 * var(--u)); left: calc(-2 * var(--u)); font-size: 10px; }
 .card-name { display: none; }
 .card-tip {
@@ -178,14 +232,14 @@ kbd {
 
 .banner {
   position: absolute;
-  top: calc(30 * var(--u));
+  top: calc(24 * var(--u));
   left: 50%;
   transform: translateX(-50%);
   padding: 0 calc(4 * var(--u));
   white-space: nowrap;
 }
 .banner b { color: var(--good); }
-.toasts { position: absolute; top: calc(46 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: calc(2 * var(--u)); }
+.toasts { position: absolute; top: calc(40 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: calc(2 * var(--u)); }
 .toast { font-size: 22px; text-shadow: var(--outline); animation: rise 0.2s steps(3) both; }
 .toast.bad { color: var(--bad); }
 .toast.good { color: var(--good); }
@@ -193,6 +247,16 @@ kbd {
 .fatal { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 20px; color: var(--bad); }
 
 @keyframes rise { from { transform: translateY(calc(4 * var(--u))); opacity: 0; } }
+/* Mask/background at 300% size: position 100% parks the band off the left
+   edge, 0% off the right, so 100% -> 0% sweeps left to right. */
+@keyframes sweep { 0% { -webkit-mask-position: 100% 0; mask-position: 100% 0; } 15%, 100% { -webkit-mask-position: 0% 0; mask-position: 0% 0; } }
+@keyframes sweep-once { from { -webkit-mask-position: 100% 0; mask-position: 100% 0; } to { -webkit-mask-position: 0% 0; mask-position: 0% 0; } }
+@keyframes glint { 0% { background-position: 100% 0; } 15%, 100% { background-position: 0% 0; } }
+@keyframes glint-once { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+@keyframes pulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; }
+}
 
 /* ------------------------------------------------------------ small screens */
 @media (max-width: 1100px) {
