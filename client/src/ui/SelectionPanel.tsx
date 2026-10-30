@@ -6,12 +6,15 @@ import { ResIcon } from './icons';
 import { SpriteIcon } from './SpriteIcon';
 
 const CONTROLS: [string, string][] = [
+  ['Space', 'Pilot ship'],
+  ['RMB', 'Fly to'],
+  ['F', 'Find ship'],
+  ['G', 'Hangar'],
   ['Drag', 'Pan'],
   ['Wheel', 'Zoom'],
   ['1–7', 'Build'],
   ['M', 'Map'],
   ['H', 'Home'],
-  ['Esc', 'Cancel'],
 ];
 
 export function SelectionPanel() {

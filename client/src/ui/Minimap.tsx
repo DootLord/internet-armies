@@ -15,12 +15,24 @@ export function Minimap() {
       raf = requestAnimationFrame(draw);
       const cv = ref.current, eng = getEngine();
       if (!cv || !eng) return;
-      const { canvas, rect } = eng.minimap();
+      const { canvas, rect, ship } = eng.minimap();
       const g = cv.getContext('2d')!;
       g.clearRect(0, 0, SIZE, SIZE);
       g.imageSmoothingEnabled = true;
       g.drawImage(canvas, 0, 0, SIZE, SIZE);
       const v = eng.getView(), s = SIZE / rect.w;
+      // Flagship: a small heading arrow.
+      g.save();
+      g.translate((ship.x - rect.x) * s, (ship.y - rect.y) * s);
+      g.rotate(ship.heading);
+      g.fillStyle = '#49e0ff';
+      g.beginPath();
+      g.moveTo(5, 0);
+      g.lineTo(-3, 3);
+      g.lineTo(-3, -3);
+      g.closePath();
+      g.fill();
+      g.restore();
       const x = (v.x - rect.x) * s, y = (v.y - rect.y) * s, w = v.w * s, h = v.h * s;
       g.strokeStyle = '#dff6ff';
       g.lineWidth = 1;

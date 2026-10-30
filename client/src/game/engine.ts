@@ -10,6 +10,11 @@ import { progressOf, Structure } from './protocol';
 import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
 import { hash2, smoothstep } from './rng';
 import type { WorldView } from './WorldView';
+import { computeStats, flightParams } from './ships/fitting';
+import { hangar } from './ships/hangar';
+import { HULL, HullDef, hullSprites } from './ships/hulls';
+import { autopilot, FlightInput, FlightParams, FlightState, newFlight, stepFlight } from './ships/flight';
+import { BANK_ANGLE, BANK_LEVELS, PITCH_SIN, projectPoint, ShipSprites } from './ships/voxel';
 
 interface Layer { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D }
 const layer = (): Layer => {
@@ -18,7 +23,7 @@ const layer = (): Layer => {
 };
 
 interface Ship { f: number; x0: number; y0: number; x1: number; y1: number; t: number; dur: number; arc: number; trail: number[] }
-interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; col: string }
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; col: string; a?: number }
 
 const MAX_ZOOM = 7;
 /** At or above this zoom, art pixels map 1:1 to buffer texels (crisp pixel art). */
@@ -27,6 +32,14 @@ const TACTICAL_ZOOM = 2;
 const MAP_FADE: [number, number] = [0.95, 0.75];
 
 const tileSeed = (col: number, row: number) => hash2(row, col, 1);
+
+
+/**
+ * Flight runs in screen-space world px, where the ground plane is squashed
+ * vertically. The model yaw that makes the nose point along a screen heading
+ * undoes that squash.
+ */
+const modelYaw = (heading: number) => Math.atan2(Math.sin(heading) / PITCH_SIN, Math.cos(heading));
 
 export interface EngineStats { fps: number; tiles: number; zoom: number; lod: string }
 
@@ -61,6 +74,17 @@ export class Engine {
   private hoverKey = '';
   private cleanup: (() => void)[] = [];
 
+  /** The player's flagship. Simulated client-side for now; see ships/flight.ts. */
+  readonly ship: FlightState;
+  private shipSprites!: ShipSprites;
+  private hull!: HullDef;
+  private flight!: FlightParams;
+  private shipTarget: { x: number; y: number } | null = null;
+  pilot = false;
+  private look = { x: 0, y: 0 };
+  private demo: { x: number; y: number }[] | null = null;
+  private demoIdx = 0;
+
   constructor(private host: HTMLElement, private view: WorldView, private hud: Store<HudState>) {
     assets.init();
     this.worldMap = new WorldMap(view);
@@ -71,6 +95,9 @@ export class Engine {
     const home = meta.homes[meta.player];
     this.cam.x = tileX(home.col, home.row) + CX;
     this.cam.y = tileY(home.row) + CY;
+    this.ship = newFlight(this.cam.x + 48, this.cam.y + 30, -Math.PI / 2);
+    this.applyHangar();
+    this.cleanup.push(hangar.subscribe(() => this.applyHangar()));
     // Deep-link: ?at=col,row&zoom=4 (or ?at=f2 for a faction's home).
     const q = new URLSearchParams(location.search);
     const at = q.get('at');
@@ -85,6 +112,12 @@ export class Engine {
     }
     if (q.get('zoom')) this.cam.zoom = this.cam.tz = this.clampZoom(Number(q.get('zoom')) || 3);
     this.debug = q.has('debug');
+    // Dev only: the flagship flies a loop with the camera locked on, for tuning flight feel.
+    if (import.meta.env.DEV && q.has('shipdemo')) {
+      this.demo = [0, 1, 2, 3].map((i) => ({ x: this.ship.x + Math.cos(i * 1.7) * 260, y: this.ship.y + Math.sin(i * 1.7) * 170 }));
+      this.setPilot(true);
+    }
+    if (import.meta.env.DEV && q.has('hangar')) this.hud.set({ fittingOpen: true });
     this.bindInput();
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -143,6 +176,28 @@ export class Engine {
     this.debug = !this.debug;
   }
 
+  /** Pilot mode: camera locks to the flagship and WASD flies it. */
+  setPilot(on: boolean) {
+    this.pilot = on;
+    this.keys.clear();
+    this.cam.vx = this.cam.vy = 0;
+    this.cam.gx = NaN;
+    if (on && this.cam.tz < TACTICAL_ZOOM) this.cam.tz = 3;
+    this.hud.set({ pilot: on });
+  }
+
+  /** Fly whatever hull is active in the hangar, with handling from its fitted stats. */
+  private applyHangar() {
+    const h = hangar.get();
+    this.hull = HULL[h.active];
+    this.shipSprites = hullSprites(h.active, this.view.meta!.player);
+    this.flight = flightParams(computeStats(h.active, h.fits[h.active]));
+  }
+
+  focusShip() {
+    this.centerOn(this.ship.x, this.ship.y - this.hull.alt);
+  }
+
   async demolishSelected() {
     if (!this.selected) return;
     const r = await this.view.demolish(...this.selected);
@@ -154,9 +209,9 @@ export class Engine {
     return { x: this.cam.x - w / 2, y: this.cam.y - h / 2, w, h };
   }
 
-  /** World-scale map image and the world rect it covers (minimap). */
+  /** World-scale map image, the world rect it covers, and the flagship (minimap). */
   minimap() {
-    return { canvas: this.worldMap.composite, rect: this.worldMap.rect };
+    return { canvas: this.worldMap.composite, rect: this.worldMap.rect, ship: { x: this.ship.x, y: this.ship.y, heading: this.ship.heading } };
   }
 
   // ---------------------------------------------------------------- input
@@ -207,6 +262,7 @@ export class Engine {
         this.cam.vx = this.cam.vy = 0;
         if (d.button === 0) this.click();
         else if (d.button === 2 && this.buildMode) this.setBuildMode(null);
+        else if (d.button === 2) this.orderShipTo(this.mouseWorld());
       } else if (performance.now() - d.lt > 80) this.cam.vx = this.cam.vy = 0;
     };
     on(el, 'pointerup', up);
@@ -222,12 +278,27 @@ export class Engine {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       const k = e.key.toLowerCase();
       this.mouse.shift = e.shiftKey;
+      // The hangar is modal: only its own toggles get through.
+      if (this.hud.get().fittingOpen) {
+        if (k === 'g' || k === 'escape') this.hud.set({ fittingOpen: false });
+        return;
+      }
+      if (k === 'g') {
+        this.keys.clear();
+        this.hud.set({ fittingOpen: true });
+        return;
+      }
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
         this.keys.add(k);
-        this.cam.gx = NaN;
+        if (!this.pilot) this.cam.gx = NaN;
         e.preventDefault();
-      } else if (k === 'escape') {
+      } else if (k === ' ') {
+        e.preventDefault();
+        if (!e.repeat) this.setPilot(!this.pilot);
+      } else if (k === 'f') this.focusShip();
+      else if (k === 'escape') {
         if (this.buildMode) this.setBuildMode(null);
+        else if (this.pilot) this.setPilot(false);
         else this.select(null);
       } else if (k === 'f3') {
         e.preventDefault();
@@ -265,6 +336,16 @@ export class Engine {
     this.select(h);
   }
 
+  private mouseWorld() {
+    const { cam, mouse } = this;
+    return { x: cam.x + (mouse.x - this.host.clientWidth / 2) / cam.zoom, y: cam.y + (mouse.y - this.host.clientHeight / 2) / cam.zoom };
+  }
+
+  /** Right-click: autopilot to a point. The ship hovers, so aim its shadow at the cursor. */
+  private orderShipTo(p: { x: number; y: number }) {
+    this.shipTarget = { x: p.x, y: p.y + this.hull.alt };
+  }
+
   private select(t: [number, number] | null) {
     this.selected = t;
     this.hud.set({ selected: t ? this.snap(t[0], t[1], false) : null });
@@ -294,7 +375,9 @@ export class Engine {
       this.stats.fps = Math.round(this.fpsFrames / this.fpsAcc);
       this.fpsAcc = this.fpsFrames = 0;
     }
+    this.updateShip(dt);
     this.updateCamera(dt);
+    this.shipSprites.warm(1.5);
     this.view.update(this.getView(), 3);
     this.worldMap.update(2);
     this.updateHover();
@@ -303,14 +386,64 @@ export class Engine {
     this.syncHud(dt);
   };
 
+  private updateShip(dt: number) {
+    const s = this.ship, k = this.keys;
+    let input: FlightInput = { throttle: 0, steer: 0, boost: false };
+    if (this.pilot) {
+      const thr = (k.has('w') || k.has('arrowup') ? 1 : 0) - (k.has('s') || k.has('arrowdown') ? 1 : 0);
+      const steer = (k.has('d') || k.has('arrowright') ? 1 : 0) - (k.has('a') || k.has('arrowleft') ? 1 : 0);
+      if (thr || steer) {
+        this.shipTarget = null; // manual input overrides the autopilot
+        input = { throttle: thr, steer, boost: this.mouse.shift && thr > 0 };
+      }
+    }
+    if (this.demo && !this.shipTarget) this.shipTarget = this.demo[this.demoIdx++ % this.demo.length];
+    if (this.shipTarget && !input.throttle && !input.steer) {
+      const ap = autopilot(s, this.shipTarget.x, this.shipTarget.y);
+      if (ap) input = ap;
+      else this.shipTarget = null;
+    }
+    // Fixed sub-steps keep the flight model frame-rate independent.
+    const n = Math.ceil(dt / (1 / 120));
+    for (let i = 0; i < n; i++) stepFlight(s, input, dt / n, this.flight);
+
+    // Soft wall at the sector's edge.
+    const R = this.view.params.radiusPx * 0.97, d = Math.hypot(s.x, s.y);
+    if (d > R) {
+      const nx = s.x / d, ny = s.y / d, out = s.vx * nx + s.vy * ny;
+      s.x = nx * R;
+      s.y = ny * R;
+      if (out > 0) { s.vx -= nx * out; s.vy -= ny * out; }
+    }
+
+    // Exhaust from each engine, more of it the harder we burn.
+    if (this.cam.zoom >= 1 && this.parts.length < 600) {
+      const yaw = modelYaw(s.heading), roll = Math.round(-s.bank * BANK_LEVELS) * BANK_ANGLE;
+      const bx = -Math.cos(s.heading), by = -Math.sin(s.heading);
+      const col = FACTIONS[this.view.meta!.player].color;
+      for (const [i, eng] of this.shipSprites.model.engines.entries()) {
+        if (Math.random() > dt * (i === 0 ? 40 : 25) * Math.max(0.15, s.thrust)) continue;
+        const [ox, oy] = projectPoint(eng, yaw, roll);
+        const sp = 30 + 70 * s.thrust;
+        this.parts.push({
+          x: s.x + ox, y: s.y - this.hull.alt + oy,
+          vx: bx * sp + s.vx * 0.3 + (Math.random() - 0.5) * 10, vy: by * sp + s.vy * 0.3 + (Math.random() - 0.5) * 10,
+          life: 0.2 + 0.3 * s.thrust, max: 0.2 + 0.3 * s.thrust, col: Math.random() < 0.12 ? '#ffffff' : col, a: 0.5,
+        });
+      }
+    }
+  }
+
   private updateCamera(dt: number) {
     const c = this.cam;
     const speed = 900 / c.zoom;
     let kx = 0, ky = 0;
-    if (this.keys.has('a') || this.keys.has('arrowleft')) kx--;
-    if (this.keys.has('d') || this.keys.has('arrowright')) kx++;
-    if (this.keys.has('w') || this.keys.has('arrowup')) ky--;
-    if (this.keys.has('s') || this.keys.has('arrowdown')) ky++;
+    if (!this.pilot) {
+      if (this.keys.has('a') || this.keys.has('arrowleft')) kx--;
+      if (this.keys.has('d') || this.keys.has('arrowright')) kx++;
+      if (this.keys.has('w') || this.keys.has('arrowup')) ky--;
+      if (this.keys.has('s') || this.keys.has('arrowdown')) ky++;
+    }
     c.x += kx * speed * dt;
     c.y += ky * speed * dt;
 
@@ -337,6 +470,18 @@ export class Engine {
       const mx = this.mouse.x - this.host.clientWidth / 2, my = this.mouse.y - this.host.clientHeight / 2;
       c.x += mx / prev - mx / c.zoom;
       c.y += my / prev - my / c.zoom;
+    }
+    if (this.pilot) {
+      // Lock to the ship (after zoom anchoring, which would otherwise drag us
+      // off it) with a little look-ahead along its velocity. An integer camera
+      // puts the ship on whole art pixels, so it never shimmers.
+      const s = this.ship, f = 1 - Math.exp(-dt * 3);
+      this.look.x += (s.vx * 0.35 - this.look.x) * f;
+      this.look.y += (s.vy * 0.35 - this.look.y) * f;
+      c.x = Math.round(s.x + this.look.x);
+      c.y = Math.round(s.y - this.hull.alt + this.look.y);
+      c.vx = c.vy = 0;
+      c.gx = NaN;
     }
     const R = this.view.params.radiusPx;
     c.x = Math.max(-R, Math.min(R, c.x));
@@ -513,12 +658,14 @@ export class Engine {
     if (zoom >= 1) {
       this.drawShips(c, e, l);
       for (const p of this.parts) {
-        e.globalAlpha = Math.min(1, (p.life / p.max) * 1.6);
+        e.globalAlpha = Math.min(1, (p.life / p.max) * 1.6) * (p.a ?? 1);
         e.fillStyle = p.col;
         e.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
       }
       e.globalAlpha = 1;
     }
+    if (zoom > MAP_FADE[1]) this.drawFlagship(t);
+    if (mapA > 0) this.drawFlagshipMarker(mapA, k);
     this.drawOverlays(t, k);
     if (this.debug) this.drawDebug(ox, oy, wx1, wy1, k);
   }
@@ -704,6 +851,73 @@ export class Engine {
     l.globalAlpha = 0.5;
     l.drawImage(assets.light(f.color), x + CX - R, y + CY - 10 - R, R * 2, R * 2);
     l.globalAlpha = 1;
+  }
+
+  private drawFlagship(t: number) {
+    const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
+    const s = this.ship, col = FACTIONS[this.view.meta!.player].color;
+    const lvl = Math.max(-BANK_LEVELS, Math.min(BANK_LEVELS, Math.round(-s.bank * BANK_LEVELS)));
+    const f = this.shipSprites.frame(ShipSprites.yawIndex(modelYaw(s.heading)), lvl);
+    const half = this.shipSprites.size / 2;
+    const alt = this.hull.alt + Math.sin(t * 1.7) * 1.2;
+    const gx = Math.round(s.x), gy = Math.round(s.y);
+
+    // Shadow only where there's a plate to fall on.
+    const under = pick(gx, gy);
+    const k = under && this.view.kind(under[0], under[1]);
+    if (k && k !== 'void') {
+      c.fillStyle = 'rgba(0,0,0,0.4)';
+      c.beginPath();
+      c.ellipse(gx, gy + 1, this.hull.shadow, this.hull.shadow * 0.4, s.heading * 0.35, 0, Math.PI * 2);
+      c.fill();
+      l.globalAlpha = 0.25 + 0.2 * s.thrust;
+      l.drawImage(assets.light(col), gx - 26, gy - 18, 52, 36);
+    }
+
+    const sx = gx - half, sy = Math.round(s.y - alt) - half;
+    c.drawImage(f.color, sx, sy);
+    e.drawImage(f.emit, sx, sy);
+    // Hull floodlights: a faint self-lit copy so the ship reads above the dim plates.
+    e.globalAlpha = 0.2;
+    e.drawImage(f.color, sx, sy);
+    e.globalAlpha = 1;
+    // Engine light sits behind the hull: lights the plates and exhaust, not the ship itself.
+    const ex = gx - Math.cos(s.heading) * 26, ey = Math.round(s.y - alt) - Math.sin(s.heading) * 20;
+    l.globalAlpha = 0.12 + 0.3 * s.thrust;
+    l.drawImage(assets.light(col), ex - 30, ey - 30, 60, 60);
+    l.globalAlpha = 1;
+
+    if (this.shipTarget) {
+      const { x, y } = this.shipTarget, r = 6 + 2 * Math.sin(t * 6);
+      e.globalAlpha = 0.85;
+      e.strokeStyle = col;
+      e.lineWidth = 1;
+      e.beginPath();
+      e.ellipse(Math.round(x) + 0.5, Math.round(y) + 0.5, r, r * PITCH_SIN, 0, 0, Math.PI * 2);
+      e.stroke();
+      e.fillStyle = col;
+      e.fillRect(Math.round(x) - 2, Math.round(y), 5, 1);
+      e.fillRect(Math.round(x), Math.round(y) - 2, 1, 5);
+      e.globalAlpha = 1;
+    }
+  }
+
+  /** On the strategic map the sprite is sub-pixel, so draw a heading arrow at constant size. */
+  private drawFlagshipMarker(alpha: number, k: number) {
+    const e = this.emit.ctx, s = this.ship, z = 7 / k;
+    e.save();
+    e.translate(s.x, s.y);
+    e.rotate(s.heading);
+    e.globalAlpha = alpha;
+    e.fillStyle = FACTIONS[this.view.meta!.player].color;
+    e.beginPath();
+    e.moveTo(z, 0);
+    e.lineTo(-z * 0.75, z * 0.65);
+    e.lineTo(-z * 0.35, 0);
+    e.lineTo(-z * 0.75, -z * 0.65);
+    e.closePath();
+    e.fill();
+    e.restore();
   }
 
   private drawShips(c: CanvasRenderingContext2D, e: CanvasRenderingContext2D, l: CanvasRenderingContext2D) {

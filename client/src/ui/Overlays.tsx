@@ -43,6 +43,17 @@ export function BuildBanner() {
   );
 }
 
+export function PilotBanner() {
+  const pilot = useStore(hud, (s) => s.pilot);
+  const mode = useStore(hud, (s) => s.buildMode);
+  if (!pilot || mode) return null;
+  return (
+    <div className="banner f-tip pilot">
+      <b>Pilot</b> <span className="muted">W/S thrust · A/D steer · Shift boost · Space or Esc to exit</span>
+    </div>
+  );
+}
+
 export function Toasts() {
   const toasts = useStore(hud, (s) => s.toasts);
   return (

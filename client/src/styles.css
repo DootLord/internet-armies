@@ -239,10 +239,117 @@ kbd {
   white-space: nowrap;
 }
 .banner b { color: var(--good); }
+.banner.pilot b { color: var(--acc); }
 .toasts { position: absolute; top: calc(40 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: calc(2 * var(--u)); }
 .toast { font-size: 22px; text-shadow: var(--outline); animation: rise 0.2s steps(3) both; }
 .toast.bad { color: var(--bad); }
 .toast.good { color: var(--good); }
+
+/* ------------------------------------------------------------ hangar & fitting */
+.hangar-btn { display: flex; align-items: center; gap: calc(2 * var(--u)); height: calc(12 * var(--u)); padding: 0 calc(3 * var(--u)); font-size: 18px; }
+.hangar-btn kbd { font-size: 9px; }
+
+.fit-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 3, 8, 0.62);
+  pointer-events: auto;
+}
+.fitting {
+  position: relative;
+  width: min(1120px, 96vw);
+  max-height: 94vh;
+  display: flex;
+  flex-direction: column;
+  gap: calc(3 * var(--u));
+  --sweep-delay: 0s;
+}
+.fit-head { display: flex; align-items: center; gap: calc(4 * var(--u)); font-size: 24px; }
+.fit-head .muted { font-size: 17px; margin-right: auto; }
+
+.fit-body { display: grid; grid-template-columns: 230px 1fr 290px; gap: calc(5 * var(--u)); min-height: 0; }
+
+.fit-hulls { display: flex; flex-direction: column; gap: calc(2 * var(--u)); }
+.hull-card { display: flex; align-items: center; gap: calc(3 * var(--u)); padding: calc(var(--u)) calc(2 * var(--u)); text-align: left; }
+.hull-card .ship-preview { flex: none; }
+.hc-text { display: flex; flex-direction: column; min-width: 0; font-size: 16px; line-height: 1.1; }
+.hc-name { font-size: 20px; color: var(--hi); }
+.hc-slots { display: flex; align-items: center; gap: calc(2 * var(--u)); font: 400 11px/1 var(--num); margin-top: 3px; }
+.hc-slots i { font-style: normal; }
+.hc-active { font: 400 14px/1 var(--font); color: var(--acc); text-shadow: 0 0 6px rgba(73, 224, 255, 0.6); margin-left: auto; }
+
+.fit-center { display: flex; flex-direction: column; gap: calc(2 * var(--u)); min-width: 0; }
+.fit-title h2 { margin: 0; font-size: 30px; font-weight: 400; color: var(--hi); line-height: 1; }
+.fit-title .muted { font-size: 16px; }
+.fit-stage {
+  display: grid;
+  place-items: center;
+  height: 290px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 55%, rgba(73, 224, 255, 0.12), transparent 60%),
+    repeating-linear-gradient(0deg, rgba(120, 170, 220, 0.05) 0 1px, transparent 1px 16px),
+    repeating-linear-gradient(90deg, rgba(120, 170, 220, 0.05) 0 1px, transparent 1px 16px),
+    #04060b;
+}
+
+.ship-preview { position: relative; display: block; }
+.ship-preview canvas { position: absolute; inset: 0; image-rendering: pixelated; }
+.ship-preview .emit { mix-blend-mode: screen; }
+.ship-preview .bloom { mix-blend-mode: screen; filter: blur(5px) brightness(1.8); image-rendering: auto; opacity: 0.9; }
+
+.slot-rows { display: flex; flex-direction: column; gap: calc(2 * var(--u)); }
+.slot-row { display: flex; align-items: center; gap: calc(2 * var(--u)); }
+.slot-label { width: 44px; font-size: 18px; }
+.slot { width: calc(17 * var(--u)); height: calc(17 * var(--u)); display: grid; place-items: center; cursor: pointer; }
+.slot:not(.filled)::after {
+  content: '';
+  width: calc(5 * var(--u));
+  height: calc(5 * var(--u));
+  border: var(--u) dashed color-mix(in srgb, var(--slot) 45%, transparent);
+}
+.slot.focus:not(.filled)::after { border-style: solid; border-color: var(--slot); box-shadow: 0 0 8px var(--slot); }
+.slot.filled { box-shadow: inset 0 0 12px color-mix(in srgb, var(--slot) 35%, transparent); }
+.slot.filled:hover { filter: brightness(1.3); }
+
+.budget { display: grid; grid-template-columns: 52px 1fr 92px; align-items: center; gap: calc(3 * var(--u)); font-size: 17px; }
+.budget .num { font-size: 11px; text-align: right; }
+.budget-bar { --bw: calc(2 * var(--u)); --sl: 2; --fi: var(--f-well); height: calc(8 * var(--u)); padding: 0; position: relative; }
+.budget-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(180deg, #6df2ff, #1f8fa8); box-shadow: 0 0 8px rgba(73, 224, 255, 0.6); transition: width 0.15s steps(4); }
+.budget-fill.hot { background: linear-gradient(180deg, #ffd36b, #c7802a); box-shadow: 0 0 8px rgba(255, 195, 92, 0.6); }
+
+.fit-actions { min-height: 32px; display: flex; align-items: center; }
+.pbtn.wide { padding: calc(var(--u)) calc(6 * var(--u)); font-size: 20px; color: var(--acc); }
+
+.fit-modules { display: flex; flex-direction: column; gap: calc(2 * var(--u)); min-height: 0; }
+.tabs { display: flex; gap: calc(2 * var(--u)); }
+.tab { flex: 1; height: calc(14 * var(--u)); font-size: 18px; }
+.tab-hint { font-size: 15px; }
+.mod-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.mod-row { width: 100%; display: flex; align-items: center; gap: calc(3 * var(--u)); padding: 3px calc(2 * var(--u)); font-size: 18px; text-align: left; border: 1px solid transparent; }
+.mod-row:hover { background: rgba(73, 224, 255, 0.07); border-color: rgba(73, 224, 255, 0.25); }
+.mod-row.blocked { opacity: 0.45; }
+.mod-name { flex: 1; }
+.mod-cost { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.mod-cost small { font-size: 8px; margin-left: 1px; }
+.mod-info { display: flex; flex-direction: column; gap: 3px; padding: calc(2 * var(--u)); font-size: 16px; min-height: 104px; margin-top: auto; }
+.mod-info .bad { color: var(--bad); }
+
+.fit-stats { display: grid; grid-template-columns: repeat(9, 1fr); gap: calc(2 * var(--u)); padding-top: calc(3 * var(--u)); border-top: var(--u) solid #161d2b; }
+.stat-cell { display: flex; flex-direction: column; align-items: center; font-size: 15px; }
+.stat-cell .num { font-size: 13px; }
+.stat-cell .delta { font-size: 10px; }
+.delta.up { color: var(--good); }
+.delta.down { color: var(--bad); }
+
+@media (max-width: 1000px) {
+  .fit-body { grid-template-columns: 1fr; overflow-y: auto; }
+  .fit-hulls { flex-direction: row; overflow-x: auto; }
+  .fit-stats { grid-template-columns: repeat(5, 1fr); }
+}
 
 .connecting { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; color: var(--acc); text-shadow: var(--outline); }
 

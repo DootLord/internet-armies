@@ -52,5 +52,29 @@ Press **F3** (or add `?debug`) for the chunk overlay: chunk grid by stream state
 snapshots, deltas and resyncs.
 
 ```
-npm test   # chunk maths, terrain determinism, client/shard convergence, packet-loss resync
+npm test   # chunk maths, terrain determinism, client/shard convergence, packet-loss resync, flight model
 ```
+
+## Flagship (prototype)
+
+The player is a ship. **Space** toggles pilot mode (camera locks on; W/S thrust, A/D steer, Shift boost);
+**right-click** anywhere flies there on autopilot; **F** finds your ship.
+
+- `game/ships/voxel.ts` ray-casts a small voxel model into pixel-art sprites (64 headings × 5 bank angles,
+  rendered lazily) using the world's camera pitch, light and palettes.
+- `game/ships/flagship.ts` is the ship's shape as a function over model space.
+- `game/ships/flight.ts` is a pure, deterministic flight step, so the server can run the same code later.
+  Simulated client-side for now.
+
+### Hulls & fitting
+
+Press **G** (or the Hangar button) to open the hangar. Four hulls (`game/ships/hulls.ts`): Wisp
+(interceptor), Lancer (strike cruiser), Bastion (heavy gunship), Mule (hauler). Each has high (weapons,
+mining/salvage beams), mid (tools/utility) and low (passive upgrades) slots plus **CPU** and **power**
+budgets. Modules live in `game/ships/modules.ts`; the rules and final stats are pure functions in
+`game/ships/fitting.ts` (shared with the server later). Repeated multipliers get diminishing returns.
+Fitted stats drive the flight model, so an armour-plated Bastion really does handle like a brick.
+The hangar saves to localStorage for now.
+
+Dev tools: `/ships.html` renders every hull's sprite sheet; `?shipdemo` flies a loop; `?hangar` opens
+the hangar on load.

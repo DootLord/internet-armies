@@ -3,9 +3,10 @@ import { Engine } from './game/engine';
 import { hud, setEngine, world } from './game/game';
 import { BuildDock } from './ui/BuildDock';
 import { DebugPanel } from './ui/DebugPanel';
+import { Fitting } from './ui/Fitting';
 import { Feed } from './ui/Feed';
 import { Minimap } from './ui/Minimap';
-import { BuildBanner, Toasts, Tooltip } from './ui/Overlays';
+import { BuildBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
 import { SelectionPanel } from './ui/SelectionPanel';
 import { installSkin } from './ui/skin';
 import { TopBar } from './ui/TopBar';
@@ -48,12 +49,14 @@ export function App() {
           <TopBar />
           <Feed />
           <BuildBanner />
+          <PilotBanner />
           <Toasts />
           <Minimap />
           <SelectionPanel />
           <BuildDock />
           <DebugPanel />
           <Tooltip />
+          <Fitting />
         </div>
       )}
     </div>

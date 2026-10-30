@@ -35,6 +35,8 @@ export interface HudState {
   toasts: Toast[];
   sectors: number;
   zoom: number;
+  pilot: boolean;
+  fittingOpen: boolean;
 }
 
 // ?radius=40000 (world px) for stress tests; the default disc is ~0.9M hex slots.
@@ -53,6 +55,8 @@ export const hud = createStore<HudState>({
   toasts: [],
   sectors: 0,
   zoom: 3,
+  pilot: false,
+  fittingOpen: false,
 });
 
 world.listeners = {

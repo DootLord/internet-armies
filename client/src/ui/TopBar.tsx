@@ -38,6 +38,9 @@ export function TopBar() {
         ))}
       </div>
       <div className="clock">
+        <button className="pbtn hangar-btn" onClick={() => hud.set({ fittingOpen: true })} title="Hangar & fitting (G)">
+          Hangar <kbd>G</kbd>
+        </button>
         <span className="muted">Kestrel Cluster</span>
         <span>
           <span className="muted">Sectors</span> <span className="num">{sectors}</span>
