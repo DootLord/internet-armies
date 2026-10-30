@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Engine } from './game/engine';
 import { hud, setEngine, world } from './game/game';
 import { BuildDock } from './ui/BuildDock';
+import { DebugPanel } from './ui/DebugPanel';
 import { Feed } from './ui/Feed';
 import { Minimap } from './ui/Minimap';
 import { BuildBanner, Toasts, Tooltip } from './ui/Overlays';
@@ -18,14 +19,20 @@ export function App() {
 
   useEffect(() => {
     let engine: Engine | null = null;
-    try {
-      engine = new Engine(host.current!, world, hud);
-      setEngine(engine);
-      setReady(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!world.meta) await world.connect();
+        if (cancelled) return;
+        engine = new Engine(host.current!, world, hud);
+        setEngine(engine);
+        setReady(true);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
     return () => {
+      cancelled = true;
       engine?.dispose();
       setEngine(null);
     };
@@ -34,7 +41,8 @@ export function App() {
   return (
     <div className="app">
       <div ref={host} className="game-host" />
-      {error && <div className="fatal panel">{error}</div>}
+      {error && <div className="fatal f-panel">{error}</div>}
+      {!ready && !error && <div className="connecting">Connecting to Kestrel Cluster…</div>}
       {ready && (
         <div className="hud">
           <TopBar />
@@ -44,6 +52,7 @@ export function App() {
           <Minimap />
           <SelectionPanel />
           <BuildDock />
+          <DebugPanel />
           <Tooltip />
         </div>
       )}

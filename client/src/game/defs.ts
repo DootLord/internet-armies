@@ -68,5 +68,10 @@ export const FACTIONS: Faction[] = [
   f(2, 'Crimson Accord', 'CRA', '#ff4f6a'),
   f(3, 'Verdant Collective', 'VDC', '#5cff9d'),
   f(4, 'Umbral Reach', 'UMB', '#b48cff'),
+  f(5, 'Solace Union', 'SOL', '#ffe76b'),
+  f(6, 'Ashen Covenant', 'ASH', '#ff7f3f'),
+  f(7, 'Tidewater Compact', 'TDW', '#3dffd2'),
+  f(8, 'Nova Dominion', 'NOV', '#ff6bd5'),
+  f(9, 'Iron Meridian', 'IRM', '#a9bdd6'),
 ];
 export const PLAYER = 0;

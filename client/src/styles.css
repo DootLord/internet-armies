@@ -244,6 +244,25 @@ kbd {
 .toast.bad { color: var(--bad); }
 .toast.good { color: var(--good); }
 
+.connecting { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 24px; color: var(--acc); text-shadow: var(--outline); }
+
+.debug {
+  position: absolute;
+  top: calc(23 * var(--u));
+  left: calc(4 * var(--u));
+  width: 300px;
+  padding: 0 calc(2 * var(--u));
+  font-size: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  pointer-events: none;
+}
+.debug-row { display: flex; justify-content: space-between; gap: 12px; }
+.debug-row .num { font-size: 10px; }
+.debug-legend { display: flex; align-items: center; gap: 4px; font-size: 14px; color: var(--muted); margin-top: 4px; }
+.debug-legend i { width: 8px; height: 8px; display: inline-block; }
+
 .fatal { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 20px; color: var(--bad); }
 
 @keyframes rise { from { transform: translateY(calc(4 * var(--u))); opacity: 0; } }

@@ -1,10 +1,15 @@
-import { BUILDABLE, FACTIONS, PLAYER, STRUCT, StructureKind, TileKind } from './defs';
+import { BUILDABLE, FACTIONS, STRUCT, StructureKind, TileKind } from './defs';
 import { HudState, TileSnap, toast } from './game';
 import { CX, CY, neighbor, pick, RH, TW, tileX, tileY } from './hex';
 import { Post } from './post';
 import { assets, SOX, SOY, STAR_DOMAIN, TILE_PAD } from './sprites';
 import { Store } from './store';
-import { Structure, World } from './world';
+import { Chunk, CHUNK_PX_H, CHUNK_PX_W, CS_BITS, localIndex, pack } from './chunks';
+import { KINDS, VOID } from './terrain';
+import { progressOf, Structure } from './protocol';
+import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
+import { hash2, smoothstep } from './rng';
+import type { WorldView } from './WorldView';
 
 interface Layer { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D }
 const layer = (): Layer => {
@@ -15,10 +20,15 @@ const layer = (): Layer => {
 interface Ship { f: number; x0: number; y0: number; x1: number; y1: number; t: number; dur: number; arc: number; trail: number[] }
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; col: string }
 
-const MIN_ZOOM = 2, MAX_ZOOM = 7;
-const MINI_COLORS: Record<TileKind, string> = {
-  void: '', plate: '#2b3447', rock: '#2a2329', ore: '#5e3419', crystal: '#145d68', ice: '#36577a', gas: '#3e2352', ruin: '#33272a',
-};
+const MAX_ZOOM = 7;
+/** At or above this zoom, art pixels map 1:1 to buffer texels (crisp pixel art). */
+const TACTICAL_ZOOM = 2;
+/** Tiles fade out / map fades in across this zoom band. */
+const MAP_FADE: [number, number] = [0.95, 0.75];
+
+const tileSeed = (col: number, row: number) => hash2(row, col, 1);
+
+export interface EngineStats { fps: number; tiles: number; zoom: number; lod: string }
 
 export class Engine {
   private glc = document.createElement('canvas');
@@ -27,8 +37,12 @@ export class Engine {
   private col = layer();
   private emit = layer();
   private light = layer();
+  private chunkMaps = new ChunkMaps();
+  private worldMap: WorldMap;
 
   cam = { x: 0, y: 0, zoom: 3, tz: 3, vx: 0, vy: 0, gx: NaN, gy: NaN };
+  debug = false;
+  readonly stats: EngineStats = { fps: 0, tiles: 0, zoom: 3, lod: 'tactical' };
   private mouse = { x: 0, y: 0, inside: false, shift: false };
   private drag: null | { id: number; sx: number; sy: number; lx: number; ly: number; moved: boolean; button: number; lt: number } = null;
   private keys = new Set<string>();
@@ -36,35 +50,41 @@ export class Engine {
   private selected: [number, number] | null = null;
   private buildMode: StructureKind | null = null;
   private ships: Ship[] = [];
+  private shipSources: Structure[][] = [];
+  private shipAcc = 1;
   private parts: Particle[] = [];
   private raf = 0;
   private last = 0;
   private syncAcc = 0;
+  private fpsAcc = 0;
+  private fpsFrames = 0;
   private hoverKey = '';
-  private mini: { cv: HTMLCanvasElement; v: number } | null = null;
   private cleanup: (() => void)[] = [];
 
-  constructor(private host: HTMLElement, private world: World, private hud: Store<HudState>) {
+  constructor(private host: HTMLElement, private view: WorldView, private hud: Store<HudState>) {
     assets.init();
+    this.worldMap = new WorldMap(view);
     this.glc.className = 'game-canvas';
     host.appendChild(this.glc);
     this.post = new Post(this.glc);
-    const home = world.homes[PLAYER];
+    const meta = view.meta!;
+    const home = meta.homes[meta.player];
     this.cam.x = tileX(home.col, home.row) + CX;
     this.cam.y = tileY(home.row) + CY;
     // Deep-link: ?at=col,row&zoom=4 (or ?at=f2 for a faction's home).
     const q = new URLSearchParams(location.search);
     const at = q.get('at');
     if (at) {
-      const h = at.startsWith('f') ? world.homes[Number(at.slice(1))] : null;
+      const h = at.startsWith('f') ? meta.homes[Number(at.slice(1))] : null;
       const [c, r] = h ? [h.col, h.row] : at.split(',').map(Number);
-      if (Number.isFinite(c) && Number.isFinite(r) && world.tile(c, r)) {
+      if (Number.isFinite(c) && Number.isFinite(r)) {
         this.cam.x = tileX(c, r) + CX;
         this.cam.y = tileY(r) + CY;
-        if (world.tile(c, r)!.kind !== 'void') this.select([c, r]);
+        this.selected = [c, r];
       }
     }
-    if (q.get('zoom')) this.cam.zoom = this.cam.tz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(q.get('zoom')) || 3));
+    if (q.get('zoom')) this.cam.zoom = this.cam.tz = this.clampZoom(Number(q.get('zoom')) || 3);
+    this.debug = q.has('debug');
     this.bindInput();
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -81,6 +101,8 @@ export class Engine {
     this.buildMode = kind;
     this.hoverKey = '';
     this.hud.set({ buildMode: kind });
+    // Placing needs tile-level detail; pull the camera in if we're on the map.
+    if (kind && this.cam.tz < TACTICAL_ZOOM) this.cam.tz = 3;
   }
 
   centerOn(wx: number, wy: number) {
@@ -89,24 +111,42 @@ export class Engine {
   }
 
   goHome() {
-    const h = this.world.homes[PLAYER];
+    const m = this.view.meta!, h = m.homes[m.player];
     this.centerOn(tileX(h.col, h.row) + CX, tileY(h.row) + CY);
   }
 
   focusTile(col: number, row: number) {
     this.centerOn(tileX(col, row) + CX, tileY(row) + CY);
+    if (this.cam.tz < TACTICAL_ZOOM) this.cam.tz = 3;
     this.select([col, row]);
   }
 
-  setZoom(z: number) {
-    this.cam.tz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+  /** Smallest zoom that still fits the whole world on screen. */
+  get minZoom() {
+    const R = this.view.params.radiusPx;
+    return Math.max(0.02, Math.min(this.host.clientWidth, this.host.clientHeight) / (2.1 * R));
   }
 
-  demolishSelected() {
+  private clampZoom(z: number) {
+    return Math.max(this.minZoom, Math.min(MAX_ZOOM, z));
+  }
+
+  setZoom(z: number) {
+    this.cam.tz = this.clampZoom(z);
+  }
+
+  zoomBy(factor: number) {
+    this.setZoom(this.cam.tz * factor);
+  }
+
+  toggleDebug() {
+    this.debug = !this.debug;
+  }
+
+  async demolishSelected() {
     if (!this.selected) return;
-    const r = this.world.demolish(...this.selected);
+    const r = await this.view.demolish(...this.selected);
     if (!r.ok) toast(r.reason!, 'bad');
-    this.select(this.selected);
   }
 
   getView() {
@@ -114,37 +154,9 @@ export class Engine {
     return { x: this.cam.x - w / 2, y: this.cam.y - h / 2, w, h };
   }
 
-  /** Low-res overview for the minimap; rebuilt only when territory changes. */
+  /** World-scale map image and the world rect it covers (minimap). */
   minimap() {
-    const { world } = this;
-    if (this.mini && this.mini.v === world.version) return this.mini.cv;
-    const cv = this.mini?.cv ?? document.createElement('canvas');
-    // 3x2 map pixels per hex keeps the world's aspect ratio (32x21 px tiles).
-    cv.width = world.cols * 3 + 2;
-    cv.height = world.rows * 2;
-    const g = cv.getContext('2d')!;
-    g.clearRect(0, 0, cv.width, cv.height);
-    for (const t of world.tiles) {
-      if (t.kind === 'void') continue;
-      const x = t.col * 3 + (t.row & 1), y = t.row * 2;
-      let border = false;
-      if (t.owner >= 0) for (let d = 0; d < 6; d++) if (world.tile(...neighbor(t.col, t.row, d))?.owner !== t.owner) border = true;
-      g.fillStyle = MINI_COLORS[t.kind];
-      g.fillRect(x, y, 3, 2);
-      if (t.owner >= 0) {
-        g.globalAlpha = border ? 0.95 : 0.32;
-        g.fillStyle = FACTIONS[t.owner].color;
-        g.fillRect(x, y, 3, 2);
-        g.globalAlpha = 1;
-      }
-      if (t.structure) {
-        const nexus = t.structure.kind === 'nexus';
-        g.fillStyle = nexus ? '#ffffff' : FACTIONS[t.structure.owner].color;
-        g.fillRect(x + 1, y, nexus ? 2 : 1, nexus ? 2 : 1);
-      }
-    }
-    this.mini = { cv, v: world.version };
-    return cv;
+    return { canvas: this.worldMap.composite, rect: this.worldMap.rect };
   }
 
   // ---------------------------------------------------------------- input
@@ -217,9 +229,13 @@ export class Engine {
       } else if (k === 'escape') {
         if (this.buildMode) this.setBuildMode(null);
         else this.select(null);
+      } else if (k === 'f3') {
+        e.preventDefault();
+        this.toggleDebug();
       } else if (k === 'h') this.goHome();
-      else if (k === '=' || k === '+') this.setZoom(this.cam.tz + 1);
-      else if (k === '-') this.setZoom(this.cam.tz - 1);
+      else if (k === '=' || k === '+') this.zoomBy(1.5);
+      else if (k === '-') this.zoomBy(1 / 1.5);
+      else if (k === 'm') this.setZoom(this.cam.tz < 1 ? 3 : this.minZoom);
       else if (k >= '1' && k <= '9') {
         const def = BUILDABLE[Number(k) - 1];
         if (def) this.setBuildMode(this.buildMode === def.kind ? null : def.kind);
@@ -232,20 +248,21 @@ export class Engine {
     on(window, 'blur', () => this.keys.clear());
   }
 
-  private click() {
+  private async click() {
     const h = this.hover;
     if (this.buildMode) {
       if (!h) return;
       const kind = this.buildMode;
-      const r = this.world.build(kind, h[0], h[1]);
-      if (!r.ok) return toast(r.reason!, 'bad');
-      toast(`${STRUCT[kind].name} — construction started`, 'good');
-      this.select(h);
+      const pre = this.view.canBuild(kind, h[0], h[1]);
+      if (!pre.ok) return toast(pre.reason!, 'bad');
       if (!this.mouse.shift) this.setBuildMode(null);
+      const r = await this.view.build(kind, h[0], h[1]);
+      if (!r.ok) return toast(r.reason!, 'bad');
+      toast(`${STRUCT[kind].name}: construction started`, 'good');
+      this.select(h);
       return;
     }
-    const t = h && this.world.tile(...h);
-    this.select(t && t.kind !== 'void' ? h : null);
+    this.select(h);
   }
 
   private select(t: [number, number] | null) {
@@ -253,14 +270,16 @@ export class Engine {
     this.hud.set({ selected: t ? this.snap(t[0], t[1], false) : null });
   }
 
-  private snap(col: number, row: number, withBuild: boolean): TileSnap {
-    const t = this.world.tile(col, row)!;
-    const s = t.structure;
+  private snap(col: number, row: number, withBuild: boolean): TileSnap | null {
+    const kind = this.view.kind(col, row);
+    if (!kind) return null;
+    const s = this.view.structure(col, row);
     const snap: TileSnap = {
-      col, row, kind: t.kind, variant: t.variant, owner: t.owner,
-      structure: s ? { kind: s.kind, progress: s.progress, level: s.level, owner: s.owner } : null,
+      col, row, kind, variant: this.view.chunkAt(col, row)!.variant[localIndex(col, row)], owner: this.view.owner(col, row),
+      structure: s ? { kind: s.kind, progress: progressOf(s, this.view.now()), level: s.level, owner: s.owner, finishAt: s.finishAt } : null,
+      known: this.view.known(col, row),
     };
-    if (withBuild && this.buildMode) Object.assign(snap, this.world.canBuild(this.buildMode, col, row));
+    if (withBuild && this.buildMode) Object.assign(snap, this.view.canBuild(this.buildMode, col, row));
     return snap;
   }
 
@@ -269,12 +288,18 @@ export class Engine {
     this.raf = requestAnimationFrame(this.frame);
     const dt = Math.min(0.05, (now - (this.last || now)) / 1000);
     this.last = now;
-    const t = now / 1000;
-    this.world.update(dt);
+    this.fpsAcc += dt;
+    this.fpsFrames++;
+    if (this.fpsAcc > 0.5) {
+      this.stats.fps = Math.round(this.fpsFrames / this.fpsAcc);
+      this.fpsAcc = this.fpsFrames = 0;
+    }
     this.updateCamera(dt);
+    this.view.update(this.getView(), 3);
+    this.worldMap.update(2);
     this.updateHover();
     this.updateShips(dt);
-    this.render(t, dt);
+    this.render(now / 1000, dt);
     this.syncHud(dt);
   };
 
@@ -304,16 +329,18 @@ export class Engine {
     }
 
     const prev = c.zoom;
-    c.zoom += (c.tz - c.zoom) * (1 - Math.exp(-dt * 14));
-    if (Math.abs(c.tz - c.zoom) < 0.002) c.zoom = c.tz;
+    // Zoom eases in log space so far-out zooming feels as smooth as close-in.
+    c.zoom = Math.exp(Math.log(c.zoom) + (Math.log(c.tz) - Math.log(c.zoom)) * (1 - Math.exp(-dt * 14)));
+    if (Math.abs(c.tz - c.zoom) < 0.001 * c.tz) c.zoom = c.tz;
     if (c.zoom !== prev && this.mouse.inside) {
       // Keep the world point under the cursor fixed while zooming.
       const mx = this.mouse.x - this.host.clientWidth / 2, my = this.mouse.y - this.host.clientHeight / 2;
       c.x += mx / prev - mx / c.zoom;
       c.y += my / prev - my / c.zoom;
     }
-    c.x = Math.max(0, Math.min(this.world.pxW, c.x));
-    c.y = Math.max(0, Math.min(this.world.pxH, c.y));
+    const R = this.view.params.radiusPx;
+    c.x = Math.max(-R, Math.min(R, c.x));
+    c.y = Math.max(-R, Math.min(R, c.y));
   }
 
   private updateHover() {
@@ -321,9 +348,9 @@ export class Engine {
     const wx = cam.x + (mouse.x - this.host.clientWidth / 2) / cam.zoom;
     const wy = cam.y + (mouse.y - this.host.clientHeight / 2) / cam.zoom;
     const p = mouse.inside && !this.drag?.moved ? pick(wx, wy) : null;
-    const t = p && this.world.tile(...p);
-    this.hover = t && t.kind !== 'void' ? p : null;
-    const key = this.hover ? `${this.hover}|${this.buildMode}|${this.world.version}` : '';
+    const k = p && this.view.kind(p[0], p[1]);
+    this.hover = k && k !== 'void' ? p : null;
+    const key = this.hover ? `${this.hover}|${this.buildMode}|${this.view.chunkAt(...this.hover)!.version}` : '';
     if (key !== this.hoverKey) {
       this.hoverKey = key;
       this.hud.set({ hover: this.hover ? this.snap(this.hover[0], this.hover[1], true) : null });
@@ -334,12 +361,7 @@ export class Engine {
     this.syncAcc += dt;
     if (this.syncAcc < 0.2) return;
     this.syncAcc = 0;
-    const w = this.world;
     this.hud.set({
-      res: { ...w.res },
-      rates: w.rates(PLAYER),
-      cycle: w.cycle,
-      sectors: w.ownedTiles(PLAYER).length,
       zoom: this.cam.tz,
       selected: this.selected ? this.snap(this.selected[0], this.selected[1], false) : null,
       hover: this.hover ? this.snap(this.hover[0], this.hover[1], true) : null,
@@ -348,19 +370,33 @@ export class Engine {
 
   // ---------------------------------------------------------------- ships & particles
   private updateShips(dt: number) {
-    const online = this.world.structures.filter((s) => s.progress >= 1);
-    for (const f of FACTIONS) {
-      const mine = online.filter((s) => s.owner === f.id);
-      const bays = mine.filter((s) => s.kind === 'dronebay' || s.kind === 'nexus');
-      const cap = Math.min(14, 1 + mine.filter((s) => s.kind === 'dronebay').length * 3);
-      if (mine.length < 2 || this.ships.filter((s) => s.f === f.id).length >= cap || Math.random() > dt * 1.5) continue;
-      const a = bays[Math.floor(Math.random() * bays.length)];
-      let b: Structure = a;
-      while (b === a) b = mine[Math.floor(Math.random() * mine.length)];
-      const [x0, y0] = this.structTop(a), [x1, y1] = this.structTop(b);
-      const dist = Math.hypot(x1 - x0, y1 - y0);
-      this.ships.push({ f: f.id, x0, y0, x1, y1, t: 0, dur: 0.8 + dist / 55, arc: Math.min(40, dist * 0.22), trail: [] });
+    // Re-gather launch sites about once a second, and only near the camera.
+    this.shipAcc += dt;
+    if (this.shipAcc > 1) {
+      this.shipAcc = 0;
+      const v = this.getView(), now = this.view.now();
+      this.shipSources = FACTIONS.map(() => []);
+      for (const s of this.view.structures.values()) {
+        if (progressOf(s, now) < 1) continue;
+        const x = tileX(s.col, s.row), y = tileY(s.row);
+        if (x < v.x - 400 || x > v.x + v.w + 400 || y < v.y - 400 || y > v.y + v.h + 400) continue;
+        this.shipSources[s.owner].push(s);
+      }
     }
+    if (this.cam.zoom >= 1)
+      FACTIONS.forEach((f) => {
+        const mine = this.shipSources[f.id] ?? [];
+        const bays = mine.filter((s) => s.kind === 'dronebay' || s.kind === 'nexus');
+        const cap = Math.min(10, bays.length * 2);
+        if (!bays.length || mine.length < 2 || this.ships.filter((s) => s.f === f.id).length >= cap || Math.random() > dt * 1.5) return;
+        const a = bays[Math.floor(Math.random() * bays.length)];
+        let b = a;
+        while (b === a) b = mine[Math.floor(Math.random() * mine.length)];
+        const [x0, y0] = this.structTop(a), [x1, y1] = this.structTop(b);
+        const dist = Math.hypot(x1 - x0, y1 - y0);
+        if (dist > 900) return;
+        this.ships.push({ f: f.id, x0, y0, x1, y1, t: 0, dur: 0.8 + dist / 55, arc: Math.min(40, dist * 0.22), trail: [] });
+      });
     this.ships = this.ships.filter((s) => (s.t += dt) < s.dur);
 
     for (const p of this.parts) {
@@ -384,34 +420,54 @@ export class Engine {
       this.glc.width = pw;
       this.glc.height = ph;
     }
-    const scale = this.cam.zoom * dpr;
-    const vw = pw / scale, vh = ph / scale;
+    const zoom = this.cam.zoom;
+    // Device px per buffer texel. Never below TACTICAL_ZOOM, so zoomed out the
+    // buffer stays small and the world is drawn scaled by k instead.
+    const bufScale = Math.max(zoom, TACTICAL_ZOOM) * dpr;
+    const k = (zoom * dpr) / bufScale;
+    const vw = pw / (zoom * dpr), vh = ph / (zoom * dpr);
     const ox0 = this.cam.x - vw / 2, oy0 = this.cam.y - vh / 2;
-    const ox = Math.floor(ox0), oy = Math.floor(oy0);
-    const lw = Math.ceil(vw) + 2, lh = Math.ceil(vh) + 2;
+    let ox = ox0, oy = oy0, fx = 0, fy = 0;
+    if (k === 1) {
+      // Integer origin + fractional shift in the shader: crisp pixels, smooth pan.
+      ox = Math.floor(ox0);
+      oy = Math.floor(oy0);
+      fx = ox0 - ox;
+      fy = oy0 - oy;
+    }
+    const lw = Math.ceil(pw / bufScale) + 2, lh = Math.ceil(ph / bufScale) + 2;
     for (const L of [this.bg, this.col, this.emit, this.light]) {
       if (L.cv.width !== lw || L.cv.height !== lh) {
         L.cv.width = lw;
         L.cv.height = lh;
       }
-      L.ctx.imageSmoothingEnabled = false;
+      L.ctx.imageSmoothingEnabled = k < 1;
       L.ctx.globalAlpha = 1;
       L.ctx.globalCompositeOperation = 'source-over';
       L.ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
-    this.drawBackground(ox, oy, lw, lh, t);
-    this.drawWorld(ox, oy, lw, lh, t, dt);
-    this.post.render({ bg: this.bg.cv, col: this.col.cv, emit: this.emit.cv, light: this.light.cv, pw, ph, scale, fx: ox0 - ox, fy: oy0 - oy, time: t });
+    this.light.ctx.imageSmoothingEnabled = true;
+    this.drawBackground(ox * k, oy * k, lw, lh, t);
+    this.drawWorld(ox, oy, k, lw, lh, t, dt);
+    this.post.render({ bg: this.bg.cv, col: this.col.cv, emit: this.emit.cv, light: this.light.cv, pw, ph, scale: bufScale, fx, fy, time: t });
   }
 
   private drawBackground(ox: number, oy: number, lw: number, lh: number, t: number) {
     const g = this.bg.ctx;
     g.fillStyle = '#03040a';
     g.fillRect(0, 0, lw, lh);
-    const neb = assets.nebula, P = 0.18;
-    const nx = Math.round(lw / 2 - (this.cam.x - this.world.pxW / 2) * P - neb.width);
-    const ny = Math.round(lh / 2 - (this.cam.y - this.world.pxH / 2) * P - neb.height);
-    g.drawImage(neb, nx, ny, neb.width * 2, neb.height * 2);
+    // Nebula drawn at 2x, mirror-tiled (every other tile flipped) so the edges
+    // always match and it covers a world of any size without seams.
+    const neb = assets.nebula, P = 0.18, w2 = neb.width * 2, h2 = neb.height * 2;
+    const sx = ox * P, sy = oy * P;
+    const i0 = Math.floor(sx / w2), j0 = Math.floor(sy / h2);
+    for (let i = i0; i * w2 - sx < lw; i++)
+      for (let j = j0; j * h2 - sy < lh; j++) {
+        const fx = i & 1 ? -1 : 1, fy = j & 1 ? -1 : 1;
+        g.setTransform(fx, 0, 0, fy, Math.round(i * w2 - sx) + (fx < 0 ? w2 : 0), Math.round(j * h2 - sy) + (fy < 0 ? h2 : 0));
+        g.drawImage(neb, 0, 0, w2, h2);
+      }
+    g.setTransform(1, 0, 0, 1, 0, 0);
 
     const D = STAR_DOMAIN;
     g.fillStyle = '#dfe9ff';
@@ -431,48 +487,89 @@ export class Engine {
     g.globalAlpha = 1;
   }
 
-  private drawWorld(ox: number, oy: number, lw: number, lh: number, t: number, dt: number) {
-    const { world } = this;
+  private drawWorld(ox: number, oy: number, k: number, lw: number, lh: number, t: number, dt: number) {
     const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
+    const zoom = this.cam.zoom;
     c.clearRect(0, 0, lw, lh);
     e.clearRect(0, 0, lw, lh);
     l.fillStyle = '#000';
     l.fillRect(0, 0, lw, lh);
-    for (const g of [c, e, l]) g.setTransform(1, 0, 0, 1, -ox, -oy);
+    const mapA = smoothstep(MAP_FADE[0], MAP_FADE[1], zoom);
+    if (mapA > 0) {
+      // The map is a flat chart: lift it out of the dark ambient.
+      l.fillStyle = `rgba(95,100,115,${mapA})`;
+      l.fillRect(0, 0, lw, lh);
+    }
+    for (const g of [c, e, l]) g.setTransform(k, 0, 0, k, -ox * k, -oy * k);
     e.globalCompositeOperation = 'lighter';
     l.globalCompositeOperation = 'lighter';
 
-    const r0 = Math.max(0, Math.floor((oy - 24) / RH)), r1 = Math.min(world.rows - 1, Math.floor((oy + lh + 48) / RH));
-    const c0 = Math.max(0, Math.floor((ox - 48) / TW)), c1 = Math.min(world.cols - 1, Math.floor((ox + lw + 16) / TW));
+    const wx1 = ox + lw / k, wy1 = oy + lh / k;
+    this.stats.zoom = zoom;
+    this.stats.lod = zoom >= TACTICAL_ZOOM ? 'tactical' : zoom > MAP_FADE[1] ? 'tactical (scaled)' : this.view.detail ? 'chunk map' : 'world map';
+    this.stats.tiles = 0;
+    if (zoom > MAP_FADE[1]) this.drawTiles(ox, oy, wx1, wy1, t, dt);
+    if (mapA > 0) this.drawMaps(ox, oy, wx1, wy1, mapA);
+    if (zoom >= 1) {
+      this.drawShips(c, e, l);
+      for (const p of this.parts) {
+        e.globalAlpha = Math.min(1, (p.life / p.max) * 1.6);
+        e.fillStyle = p.col;
+        e.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
+      }
+      e.globalAlpha = 1;
+    }
+    this.drawOverlays(t, k);
+    if (this.debug) this.drawDebug(ox, oy, wx1, wy1, k);
+  }
+
+  private drawTiles(ox: number, oy: number, wx1: number, wy1: number, t: number, dt: number) {
+    const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
+    const view = this.view, now = view.now();
+    const r0 = Math.floor((oy - 24) / RH), r1 = Math.floor((wy1 + 48) / RH);
+    const c0 = Math.floor((ox - 48) / TW), c1 = Math.floor((wx1 + 16) / TW);
     const pulse = 0.78 + 0.22 * Math.sin(t * 2.2);
     const build = this.buildMode;
+    let lcx = NaN, lcy = NaN, chunk: Chunk | undefined;
+    const chunkFor = (col: number, row: number) => {
+      const cx = col >> CS_BITS, cy = row >> CS_BITS;
+      if (cx !== lcx || cy !== lcy) {
+        lcx = cx;
+        lcy = cy;
+        chunk = view.chunks.get(pack(cx, cy));
+      }
+      return chunk && chunk.terrainReady ? chunk : undefined;
+    };
 
     for (let r = r0; r <= r1; r++) {
       for (let col = c0; col <= c1; col++) {
-        const tile = world.tile(col, r)!;
-        if (tile.kind === 'void') continue;
+        const ch = chunkFor(col, r);
+        if (!ch) continue;
+        const i = localIndex(col, r), kid = ch.kind[i];
+        if (kid === VOID) continue;
+        this.stats.tiles++;
+        const kind = KINDS[kid] as TileKind;
         const x = tileX(col, r), y = tileY(r);
-        const spr = assets.tile(tile.kind, tile.variant);
+        const spr = assets.tile(kind, ch.variant[i]);
         c.drawImage(spr.color, x, y - TILE_PAD);
         if (spr.emit) {
-          e.globalAlpha = tile.kind === 'crystal' || tile.kind === 'gas' ? 0.6 + 0.4 * Math.sin(t * 1.6 + tile.seed * 40) : 1;
+          e.globalAlpha = kind === 'crystal' || kind === 'gas' ? 0.6 + 0.4 * Math.sin(t * 1.6 + tileSeed(col, r) * 40) : 1;
           e.drawImage(spr.emit, x, y - TILE_PAD);
           e.globalAlpha = 1;
         }
-        if (tile.kind === 'crystal' || tile.kind === 'gas') {
-          const lc = tile.kind === 'crystal' ? '#4fe6ff' : '#b65cff';
+        if (kind === 'crystal' || kind === 'gas') {
           l.globalAlpha = 0.32;
-          l.drawImage(assets.light(lc), x + CX - 22, y + CY - 22, 44, 44);
-          if (Math.random() < dt * (tile.kind === 'gas' ? 1.2 : 0.8)) this.spawnTileParticle(tile.kind, x, y);
+          l.drawImage(assets.light(kind === 'crystal' ? '#4fe6ff' : '#b65cff'), x + CX - 22, y + CY - 22, 44, 44);
+          if (Math.random() < dt * (kind === 'gas' ? 1.2 : 0.8)) this.spawnTileParticle(kind, x, y);
         }
-        if (tile.owner >= 0) {
-          const f = FACTIONS[tile.owner];
+        const o = ch.owner[i];
+        if (o >= 0) {
           l.globalAlpha = 0.09;
-          l.drawImage(assets.fill(f.color), x, y);
+          l.drawImage(assets.fill(FACTIONS[o].color), x, y);
           e.globalAlpha = 0.7 * pulse;
-          for (let d = 0; d < 6; d++) if (world.tile(...neighbor(col, r, d))?.owner !== tile.owner) e.drawImage(assets.edges[tile.owner][d], x, y);
+          for (let d = 0; d < 6; d++) if (view.owner(...neighbor(col, r, d)) !== o) e.drawImage(assets.edges[o][d], x, y);
         }
-        if (build && world.canBuild(build, col, r).ok) {
+        if (build && view.canBuild(build, col, r).ok) {
           l.globalAlpha = 0.28 + 0.1 * Math.sin(t * 4);
           l.drawImage(assets.fill('#5cff9d'), x, y);
         }
@@ -480,19 +577,60 @@ export class Engine {
         e.globalAlpha = 1;
       }
       for (let col = c0; col <= c1; col++) {
-        const s = world.tile(col, r)!.structure;
-        if (s) this.drawStructure(s, tileX(col, r), tileY(r), t);
+        const ch = chunkFor(col, r);
+        const s = ch?.structures.get(localIndex(col, r));
+        if (s) this.drawStructure(s, tileX(col, r), tileY(r), t, now);
       }
     }
+  }
 
-    this.drawShips(c, e, l);
-    for (const p of this.parts) {
-      e.globalAlpha = Math.min(1, p.life / p.max * 1.6);
-      e.fillStyle = p.col;
-      e.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
+  private drawMaps(ox: number, oy: number, wx1: number, wy1: number, alpha: number) {
+    const c = this.col.ctx, e = this.emit.ctx;
+    c.globalAlpha = alpha;
+    e.globalAlpha = alpha;
+    // Whole-world layer first: it covers everything we aren't streaming.
+    const wm = this.worldMap, R = wm.rect;
+    // Nearest-neighbour when enlarging (chunky map pixels), smooth only when shrinking.
+    const k = this.cam.zoom / Math.max(this.cam.zoom, TACTICAL_ZOOM);
+    const smooth = (s: number) => {
+      c.imageSmoothingEnabled = e.imageSmoothingEnabled = s < 1;
+    };
+    // Coarse terrain only where chunk maps can't cover: far out or detail off.
+    // Mid-zoom it would show as blocky rectangles under the chunk maps.
+    if (!this.view.detail || this.cam.zoom < 0.4) {
+      smooth((R.w * k) / WorldMap.RES);
+      c.drawImage(wm.terrain, R.x, R.y, R.w, R.h);
     }
+    const ov = this.view.overview;
+    if (ov) {
+      c.globalAlpha = alpha * 0.55;
+      c.drawImage(wm.owners, ov.x0, ov.y0, ov.w * ov.cell, ov.h * ov.cell);
+      c.globalAlpha = alpha;
+      if (!this.view.detail) e.drawImage(wm.borders, ov.x0, ov.y0, ov.w * ov.cell, ov.h * ov.cell);
+    }
+    // Then baked per-chunk maps where we have live detail.
+    if (this.view.detail) {
+      const visible: Chunk[] = [];
+      const cx0 = Math.floor(ox / CHUNK_PX_W) - 1, cx1 = Math.floor(wx1 / CHUNK_PX_W);
+      const cy0 = Math.floor(oy / CHUNK_PX_H) - 1, cy1 = Math.floor(wy1 / CHUNK_PX_H);
+      for (let cy = cy0; cy <= cy1; cy++)
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const ch = this.view.chunks.get(pack(cx, cy));
+          if (ch) visible.push(ch);
+        }
+      this.chunkMaps.update(this.view, visible, 3);
+      const sw = (OV_W * TW) / 3, sh = (OV_H * RH) / 2;
+      smooth((TW / 3) * k);
+      for (const ch of visible) {
+        const b = this.chunkMaps.get(ch);
+        if (!b) continue;
+        c.drawImage(b.color, ch.cx * CHUNK_PX_W, ch.cy * CHUNK_PX_H, sw, sh);
+        e.drawImage(b.emit, ch.cx * CHUNK_PX_W, ch.cy * CHUNK_PX_H, sw, sh);
+      }
+    }
+    c.globalAlpha = 1;
     e.globalAlpha = 1;
-    this.drawOverlays(c, e, l, t);
+    c.imageSmoothingEnabled = e.imageSmoothingEnabled = k < 1;
   }
 
   private spawnTileParticle(kind: TileKind, x: number, y: number) {
@@ -502,17 +640,17 @@ export class Engine {
     else this.parts.push({ x: px, y: py - 6, vx: 0, vy: -2, life: 0.6, max: 0.6, col: '#d6fffd' });
   }
 
-  private drawStructure(s: Structure, x: number, y: number, t: number) {
+  private drawStructure(s: Structure, x: number, y: number, t: number, now: number) {
     const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
     const spr = assets.structure(s.kind, s.owner);
     const f = FACTIONS[s.owner];
     const sx = x + SOX, sy = y + SOY;
-    const def = STRUCT[s.kind];
-    const seed = this.world.tile(s.col, s.row)!.seed;
+    const seed = tileSeed(s.col, s.row);
+    const progress = progressOf(s, now);
 
-    if (s.progress < 1) {
+    if (progress < 1) {
       // Hologram fabrication: solid from the ground up, scanning beam at the build line.
-      const cut = Math.round(60 * (1 - s.progress));
+      const cut = Math.round(60 * (1 - progress));
       if (cut < 60) c.drawImage(spr.color, 0, cut, 40, 60 - cut, sx, sy + cut, 40, 60 - cut);
       e.globalAlpha = 0.45 + 0.15 * Math.sin(t * 9 + seed * 10);
       if (cut > 0) e.drawImage(spr.holo, 0, 0, 40, cut, sx, sy, 40, cut);
@@ -529,8 +667,7 @@ export class Engine {
     c.drawImage(spr.color, sx, sy);
     e.drawImage(spr.emit, sx, sy);
     for (const [bx, by] of spr.beacons) {
-      const on = Math.sin(t * 3 + seed * 20) > 0.55;
-      if (!on) continue;
+      if (Math.sin(t * 3 + seed * 20) <= 0.55) continue;
       e.fillStyle = '#ffffff';
       e.fillRect(sx + bx, sy + by, 1, 1);
       e.globalAlpha = 0.6;
@@ -563,7 +700,7 @@ export class Engine {
       e.globalAlpha = 1;
     }
 
-    const R = def.light;
+    const R = STRUCT[s.kind].light;
     l.globalAlpha = 0.5;
     l.drawImage(assets.light(f.color), x + CX - R, y + CY - 10 - R, R * 2, R * 2);
     l.globalAlpha = 1;
@@ -598,30 +735,41 @@ export class Engine {
     e.globalAlpha = 1;
   }
 
-  private drawOverlays(c: CanvasRenderingContext2D, e: CanvasRenderingContext2D, l: CanvasRenderingContext2D, t: number) {
-    const me = FACTIONS[PLAYER];
+  private drawOverlays(t: number, k: number) {
+    const e = this.emit.ctx, l = this.light.ctx;
+    const me = FACTIONS[this.view.meta!.player];
     if (this.selected) {
       const [col, row] = this.selected;
       const x = tileX(col, row), y = tileY(row);
       e.globalAlpha = 0.75 + 0.25 * Math.sin(t * 5);
       e.drawImage(assets.outline(me.color), x, y);
-      const tall = this.world.tile(col, row)?.structure ? 40 : 6;
+      if (k < 1) {
+        // Zoomed out: a ring that stays readable at any scale.
+        e.strokeStyle = me.color;
+        e.lineWidth = 2 / k;
+        e.beginPath();
+        e.arc(x + CX, y + CY, (10 + 4 * Math.sin(t * 4)) / k, 0, Math.PI * 2);
+        e.stroke();
+      } else {
+        const tall = this.view.structure(col, row) ? 40 : 6;
+        e.globalAlpha = 1;
+        e.drawImage(assets.chevrons[this.view.meta!.player], x + CX - 3, y + CY - tall - 8 + Math.round(Math.sin(t * 4) * 2));
+      }
       e.globalAlpha = 1;
-      e.drawImage(assets.chevrons[PLAYER], x + CX - 3, y + CY - tall - 8 + Math.round(Math.sin(t * 4) * 2));
     }
-    if (this.hover) {
+    if (this.hover && k > 0.4) {
       const [col, row] = this.hover;
       const x = tileX(col, row), y = tileY(row);
       l.globalAlpha = 0.22;
       l.drawImage(assets.fill('#ffffff'), x, y);
       l.globalAlpha = 1;
       if (this.buildMode) {
-        const ok = this.world.canBuild(this.buildMode, col, row).ok;
+        const ok = this.view.canBuild(this.buildMode, col, row).ok;
         e.globalAlpha = 0.95;
         e.drawImage(assets.outline(ok ? '#5cff9d' : '#ff4f6a'), x, y);
-        if (!this.world.tile(col, row)?.structure) {
+        if (!this.view.structure(col, row)) {
           e.globalAlpha = ok ? 0.75 : 0.35;
-          e.drawImage(assets.structure(this.buildMode, PLAYER).holo, x + SOX, y + SOY);
+          e.drawImage(assets.structure(this.buildMode, this.view.meta!.player).holo, x + SOX, y + SOY);
         }
         e.globalAlpha = 1;
       } else {
@@ -631,4 +779,21 @@ export class Engine {
       }
     }
   }
+
+  /** F3: chunk grid coloured by stream state, like Minecraft's chunk borders. */
+  private drawDebug(ox: number, oy: number, wx1: number, wy1: number, k: number) {
+    const e = this.emit.ctx;
+    e.lineWidth = 1 / k;
+    for (const ch of this.view.chunks.values()) {
+      const x = ch.cx * CHUNK_PX_W, y = ch.cy * CHUNK_PX_H;
+      if (x > wx1 || y > wy1 || x + CHUNK_PX_W < ox || y + CHUNK_PX_H < oy) continue;
+      const live = this.view.isSubscribed(ch.key);
+      e.strokeStyle = !ch.terrainReady ? '#ff4f6a' : live && ch.stateReady ? '#5cff9d' : live ? '#ffc35c' : '#4b5b78';
+      // Emissive feeds bloom, so keep debug lines faint or they flare across the screen.
+      e.globalAlpha = 0.22;
+      e.strokeRect(x + 0.5 / k, y + 0.5 / k, CHUNK_PX_W - 1 / k, CHUNK_PX_H - 1 / k);
+    }
+    e.globalAlpha = 1;
+  }
 }
+

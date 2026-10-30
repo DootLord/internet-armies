@@ -9,6 +9,7 @@ const CONTROLS: [string, string][] = [
   ['Drag', 'Pan'],
   ['Wheel', 'Zoom'],
   ['1–7', 'Build'],
+  ['M', 'Map'],
   ['H', 'Home'],
   ['Esc', 'Cancel'],
 ];
@@ -45,7 +46,13 @@ export function SelectionPanel() {
       <div className="sel-body">
         <h2 className="sel-title">{def ? def.name : tile.name}</h2>
         <div className="sel-meta">
-          {owner ? <span style={{ color: owner.color }}>{owner.name}</span> : <span className="muted">Unclaimed</span>}
+          {!sel.known ? (
+            <span className="muted">Syncing sector…</span>
+          ) : owner ? (
+            <span style={{ color: owner.color }}>{owner.name}</span>
+          ) : (
+            <span className="muted">Unclaimed</span>
+          )}
           <span className="muted">
             {def ? tile.name : 'Sector'} {sel.col}, {sel.row}
           </span>

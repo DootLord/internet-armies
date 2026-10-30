@@ -28,9 +28,29 @@ Deep links: `?at=col,row&zoom=4`, or `?at=f2` to jump to a faction's home.
   upscales with sharp-bilinear filtering (crisp pixels, smooth sub-pixel camera), then tone-maps,
   grades, adds vignette, chromatic fringe and grain.
 
-## Where the server plugs in
+## World streaming (chunks)
 
-`game/world.ts` is the client-side stand-in for the shard: generation, territory, build validation,
-construction timers, resource ticks and placeholder AI factions. When the server lands, that logic moves
-server-side and the client mirrors state over socket.io; `canBuild` stays on the client for instant
-placement feedback.
+One persistent map, streamed like Minecraft. Defaults: a disc of ~0.9M hex slots (`?radius=` in world px to
+stress-test), 32×32-hex chunks.
+
+- `game/protocol.ts` is the client ↔ shard contract (`WorldSource`): subscribe to chunk keys, receive a
+  snapshot then revisioned, idempotent deltas. The client resyncs a chunk if a revision is skipped.
+- `game/terrain.ts` is deterministic terrain shared by both sides, so the shard only sends what players
+  changed (ownership, structures, terrain overrides), never terrain itself.
+- `game/rules.ts` holds build validation shared by client (instant feedback) and shard (authoritative).
+- `game/sim/LocalShard.ts` is the in-process stand-in for the Node shard: sparse state, AI factions,
+  timestamp-based construction, per-chunk delta batching, simulated latency. No DOM.
+- `game/WorldView.ts` is the client chunk cache: viewport subscriptions with hysteresis, nearest-first
+  terrain generation under a frame budget, LRU eviction, revision checks. No DOM, so it's unit tested.
+- `game/render/maps.ts` covers the zoomed-out levels of detail: baked per-chunk map images, and a whole-world
+  map (procedural terrain plus the shard's ownership overview) that also feeds the minimap.
+
+Levels of detail: crisp pixel-art tiles (zoom ≥ 2) → scaled tiles → chunk maps (crossfade 0.95–0.75)
+→ world map once more than 300 chunks would be in view (streaming stops).
+
+Press **F3** (or add `?debug`) for the chunk overlay: chunk grid by stream state, cache/subscription counts,
+snapshots, deltas and resyncs.
+
+```
+npm test   # chunk maths, terrain determinism, client/shard convergence, packet-loss resync
+```

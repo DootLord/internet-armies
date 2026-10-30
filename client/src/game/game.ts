@@ -1,7 +1,9 @@
-import { PLAYER, Res, StructureKind, TileKind } from './defs';
+import { emptyRes, Res, StructureKind, TileKind } from './defs';
 import type { Engine } from './engine';
+import type { WorldEvent } from './protocol';
+import { LocalShard } from './sim/LocalShard';
 import { createStore } from './store';
-import { World, WorldEvent } from './world';
+import { WorldView } from './WorldView';
 
 export interface TileSnap {
   col: number;
@@ -9,7 +11,9 @@ export interface TileSnap {
   kind: TileKind;
   variant: number;
   owner: number;
-  structure: null | { kind: StructureKind; progress: number; level: number; owner: number };
+  structure: null | { kind: StructureKind; progress: number; level: number; owner: number; finishAt: number };
+  /** False while the chunk's live state hasn't arrived yet. */
+  known: boolean;
   ok?: boolean;
   reason?: string;
 }
@@ -33,22 +37,28 @@ export interface HudState {
   zoom: number;
 }
 
-export const world = new World(20261029);
+// ?radius=40000 (world px) for stress tests; the default disc is ~0.9M hex slots.
+const q = new URLSearchParams(location.search);
+export const source = new LocalShard({ seed: 20261029, radiusPx: Number(q.get('radius')) || 14000, latencyMs: Number(q.get('latency') ?? 60) });
+export const world = new WorldView(source);
 
 export const hud = createStore<HudState>({
-  res: { ...world.res },
-  rates: world.rates(PLAYER),
+  res: emptyRes(),
+  rates: emptyRes(),
   hover: null,
   selected: null,
   buildMode: null,
-  feed: world.log,
-  cycle: world.cycle,
+  feed: [],
+  cycle: 0,
   toasts: [],
-  sectors: world.ownedTiles(PLAYER).length,
+  sectors: 0,
   zoom: 3,
 });
 
-world.onEvent(() => hud.set({ feed: world.log }));
+world.listeners = {
+  event: () => hud.set({ feed: world.log }),
+  player: (p) => hud.set({ res: p.res, rates: p.rates, sectors: p.sectors, cycle: p.cycle }),
+};
 
 let toastId = 1;
 export function toast(text: string, tone: Toast['tone'] = 'info') {
