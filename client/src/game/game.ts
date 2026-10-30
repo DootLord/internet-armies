@@ -46,6 +46,8 @@ export interface HudState {
   aim: boolean;
   /** Storage Bay whose window is open (structure id). */
   storageOpen: number | null;
+  /** Picking an enemy structure for a Mech Bay squad to assault. */
+  deploying: boolean;
   ship: Vitals & { refuelling: boolean; repairing: boolean; wrecked: boolean; firing: boolean };
 }
 
@@ -70,6 +72,7 @@ export const hud = createStore<HudState>({
   hangarOpen: null,
   aim: false,
   storageOpen: null,
+  deploying: false,
   ship: { hp: 0, maxHp: 0, fuel: 0, maxFuel: 0, refuelling: false, repairing: false, wrecked: false, firing: false },
 });
 

@@ -2,8 +2,10 @@ import { FACTIONS, PLAYER, RES_KEYS, STRUCT, TILE_INFO } from '../game/defs';
 import { getEngine, hud, world } from '../game/game';
 import { assets } from '../game/sprites';
 import { useStore } from '../game/store';
+import { SQUAD_COST } from '../game/units';
 import { ResIcon } from './icons';
 import { SpriteIcon } from './SpriteIcon';
+import { useTick } from './useReach';
 
 const CONTROLS: [string, string][] = [
   ['Space', 'Pilot ship'],
@@ -11,12 +13,36 @@ const CONTROLS: [string, string][] = [
   ['F', 'Find ship'],
   ['G', 'Ship'],
   ['E', 'Aim weapons'],
+  ['T', 'Deploy mech'],
   ['Drag', 'Pan'],
   ['Wheel', 'Zoom'],
   ['1–0', 'Build'],
   ['M', 'Map'],
   ['H', 'Home'],
 ];
+
+/** Mech Bay: send a squad. Shows its cost, or the countdown while the next one trains. */
+function DeployButton({ id }: { id: number }) {
+  const deploying = useStore(hud, (s) => s.deploying);
+  const res = useStore(hud, (s) => s.res);
+  const wait = getEngine()?.deployCooldown(id) ?? 0;
+  useTick(wait > 0);
+  const afford = RES_KEYS.every((k) => res[k] >= (SQUAD_COST[k as keyof typeof SQUAD_COST] ?? 0));
+  if (wait > 0) return <button className="pbtn wide" disabled>Training · {Math.ceil(wait)}s</button>;
+  return (
+    <button className={`pbtn wide ${deploying ? 'on' : ''}`} disabled={!afford} title="T" onClick={() => (deploying ? getEngine()?.cancelDeploy() : getEngine()?.deploySelected())}>
+      {deploying ? 'Pick a target…' : 'Deploy mech'}
+      {!deploying &&
+        RES_KEYS.filter((k) => SQUAD_COST[k as keyof typeof SQUAD_COST]).map((k) => (
+          <span key={k} className="muted">
+            {' '}
+            <ResIcon k={k} size={11} />
+            {SQUAD_COST[k as keyof typeof SQUAD_COST]}
+          </span>
+        ))}
+    </button>
+  );
+}
 
 export function SelectionPanel() {
   const sel = useStore(hud, (s) => s.selected);
@@ -103,6 +129,7 @@ export function SelectionPanel() {
               Open cache
             </button>
           )}
+          {mine && s!.kind === 'mechbay' && s!.progress >= 1 && <DeployButton id={s!.id} />}
           {mine && s!.kind === 'hangar' && s!.progress >= 1 && (
             <button className="pbtn wide" onClick={() => hud.set({ hangarOpen: s!.id })}>
               Open hangar

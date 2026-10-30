@@ -6,7 +6,9 @@ import { assets, fractureSprite, SOX, SOY, SpriteShard, STAR_DOMAIN, TILE_PAD } 
 import { Store } from './store';
 import { Chunk, CHUNK_PX_H, CHUNK_PX_W, CS_BITS, localIndex, pack } from './chunks';
 import { KINDS, VOID } from './terrain';
-import { hpOf, progressOf, ShipReport, Structure } from './protocol';
+import { hpOf, progressOf, ShipReport, Squad, Structure } from './protocol';
+import { aliveOf, DEPLOY_COOLDOWN, routeDots, squadAt, squadMaxHp, trooperOffset } from './units';
+import { mechModel, MUZZLE, TROOPER_CHEST, TROOPER_HALF_W, TROOPER_HEIGHT, TROOPER_LIFT, trooperFrame, WALK, warmMechs } from './trooperArt';
 import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
 import { clamp, hash2, smoothstep } from './rng';
 import type { WorldView } from './WorldView';
@@ -31,7 +33,9 @@ interface Ship { f: number; x0: number; y0: number; x1: number; y1: number; t: n
 /** A flash of light; `ring` adds a shockwave on the ground plane at `gy`. */
 interface Boom { x: number; y: number; t: number; size: number; ring?: boolean; gy?: number }
 /** A pulse laser bolt in flight. */
-interface Bolt { x0: number; y0: number; x1: number; y1: number; t: number; dur: number; col: string; hit: boolean }
+interface Bolt { x0: number; y0: number; x1: number; y1: number; t: number; dur: number; col: string; hit: boolean; small?: boolean }
+/** One trooper to draw this frame: its ground point, model yaw, walk pose (0 stand, 1-2 stride) and muzzle flash. */
+interface Trooper { x: number; y: number; owner: number; yaw: number; pose: number; flash: boolean }
 /**
  * A tumbling chunk of something destroyed. x/y is its ground point, z its
  * height above it. Hull chunks are voxel models (`spr`, full 3D tumble);
@@ -120,8 +124,8 @@ export class Engine {
   /** Server time on the previous drawn frame, so one-off build events (welds, completion) fire exactly once. */
   private lastNow = NaN;
   private prevNow = NaN;
-  /** Structure id we're firing on, the fitted pulse lasers, and bolts in flight. */
-  private target: number | null = null;
+  /** What we're firing on ('s<id>' structure, 'q<id>' squad), the fitted pulse lasers, and bolts in flight. */
+  private target: string | null = null;
   private laser = { count: 0, dps: 0, range: 0 };
   private bolts: Bolt[] = [];
   private shotAcc = 0;
@@ -129,8 +133,16 @@ export class Engine {
   /** Aim mode: the mouse steers the guns instead of selecting; `trigger` while LMB is held. */
   private aim = false;
   private trigger = false;
-  /** In-range structure under the reticle. */
-  private aimAt: number | null = null;
+  /** In-range structure or squad under the reticle, keyed like `target`. */
+  private aimAt: string | null = null;
+  /** Per squad: how many troopers we've already shown falling, and its fire cadence. */
+  private squadFx = new Map<number, { alive: number; shot: number; turret: number; flash: number }>();
+  /** Troopers to draw this frame, by the hex row they stand in, so buildings in front hide them. */
+  private troopRows = new Map<number, Trooper[]>();
+  /** Picking a target for this Mech Bay; the enemy structure under the cursor; when each Mech Bay is ready again. */
+  private deployFrom: number | null = null;
+  private orderAt: number | null = null;
+  private deployReadyAt = new Map<number, number>();
   private wrecks: Wreck[] = [];
   private shake = 0;
   /** 0 = pristine .. 3 = critical; picks the cratered hull sprites and how much it smokes. */
@@ -174,7 +186,8 @@ export class Engine {
     }
     if (import.meta.env.DEV && q.has('ship')) this.hud.set({ shipOpen: true });
     view.listeners.destroyed = (s) => this.explodeStructure(s);
-    this.cleanup.push(() => (view.listeners.destroyed = undefined));
+    view.listeners.squadGone = (q) => this.squadGone(q);
+    this.cleanup.push(() => (view.listeners.destroyed = view.listeners.squadGone = undefined));
     this.bindInput();
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -188,7 +201,10 @@ export class Engine {
 
   // ---------------------------------------------------------------- public API (UI)
   setBuildMode(kind: StructureKind | null) {
-    if (kind) this.setAim(false);
+    if (kind) {
+      this.setAim(false);
+      this.cancelDeploy();
+    }
     this.buildMode = kind;
     this.hoverKey = '';
     this.hud.set({ buildMode: kind });
@@ -353,6 +369,7 @@ export class Engine {
       if (!d.moved) {
         this.cam.vx = this.cam.vy = 0;
         if (d.button === 0) this.click();
+        else if (d.button === 2 && this.deployFrom !== null) this.cancelDeploy();
         else if (d.button === 2 && this.buildMode) this.setBuildMode(null);
         else if (d.button === 2) this.orderShipTo(this.mouseWorld());
       } else if (performance.now() - d.lt > 80) this.cam.vx = this.cam.vy = 0;
@@ -390,9 +407,11 @@ export class Engine {
         if (!e.repeat) this.setPilot(!this.pilot);
       } else if (k === 'f') this.focusShip();
       else if (k === 'e' && !e.repeat) this.setAim(!this.aim);
+      else if (k === 't' && !e.repeat) this.deploySelected();
       else if (k === 'x' && import.meta.env.DEV && !e.repeat) this.damageShip(this.vitals.maxHp * 0.25); // dev: test damage and death
       else if (k === 'escape') {
         if (this.hud.get().storageOpen !== null) this.hud.set({ storageOpen: null });
+        else if (this.deployFrom !== null) this.cancelDeploy();
         else if (this.aim) this.setAim(false);
         else if (this.buildMode) this.setBuildMode(null);
         else if (this.pilot) this.setPilot(false);
@@ -420,6 +439,7 @@ export class Engine {
   }
 
   private async click() {
+    if (this.deployFrom !== null) return this.orderAssault();
     const h = this.hover;
     if (this.buildMode) {
       if (!h) return;
@@ -479,6 +499,7 @@ export class Engine {
     }
     this.updateShip(dt);
     this.updateFiring(dt);
+    this.updateSquads(dt);
     this.updateCamera(dt);
     this.shipSprites.warm(1.5);
     this.view.update(this.getView(), 3);
@@ -728,8 +749,10 @@ export class Engine {
     if (on === this.aim) return;
     this.aim = on;
     this.trigger = false;
-    if (on) this.setBuildMode(null);
-    else this.ceaseFire();
+    if (on) {
+      this.setBuildMode(null);
+      this.cancelDeploy();
+    } else this.ceaseFire();
     this.glc.classList.toggle('aim', on);
     this.hud.set({ aim: on });
   }
@@ -793,8 +816,7 @@ export class Engine {
    */
   private updateFiring(dt: number) {
     const m = this.mouseWorld();
-    const hovered = this.aim && this.mouse.inside ? this.structureAt(m.x, m.y) : null;
-    this.aimAt = hovered && this.rangeTo(hovered) <= this.laser.range ? hovered.id : null;
+    this.aimAt = this.aim && this.mouse.inside ? this.lockAt(m.x, m.y) : null;
     const live = this.aim && this.trigger && this.laser.count > 0 && !this.wreck;
     const want = live ? this.aimAt : null;
     if (want !== this.target) {
@@ -809,18 +831,33 @@ export class Engine {
     for (const b of this.bolts) {
       b.t += dt;
       if (b.t >= b.dur && b.hit) {
-        this.sparks(b.x1, b.y1, 5);
-        this.booms.push({ x: b.x1, y: b.y1, t: 0.6, size: 0.25 });
+        this.sparks(b.x1, b.y1, b.small ? 2 : 5);
+        if (!b.small) this.booms.push({ x: b.x1, y: b.y1, t: 0.6, size: 0.25 });
       }
     }
     this.bolts = this.bolts.filter((b) => b.t < b.dur);
   }
 
-  private async openFire(id: number) {
-    this.target = id;
+  /** What the reticle locks onto: a trooper under the cursor first (they're small), then a structure; only within range. */
+  private lockAt(wx: number, wy: number): string | null {
+    const now = this.view.now(), s = this.ship;
+    for (const q of this.view.squads.values()) {
+      const at = squadAt(q, now);
+      if (Math.hypot(at.x - s.x, at.y - s.y) > this.laser.range) continue;
+      for (let i = 0, n = aliveOf(q, now); i < n; i++) {
+        const [ox, oy] = trooperOffset(i, q.size, at.dx, at.dy, at.arrived);
+        if (Math.abs(at.x + ox - wx) <= TROOPER_HALF_W && Math.abs(at.y + oy - TROOPER_HEIGHT / 2 - wy) <= TROOPER_HEIGHT / 2) return `q${q.id}`;
+      }
+    }
+    const st = this.structureAt(wx, wy);
+    return st && this.rangeTo(st) <= this.laser.range ? `s${st.id}` : null;
+  }
+
+  private async openFire(key: string) {
+    this.target = key;
     // An intent, not a damage number: the shard works out the damage from the fit itself.
-    const r = await this.view.fire({ target: id, ...this.shipReport() });
-    if (!r.ok && this.target === id) {
+    const r = await this.view.fire({ target: Number(key.slice(1)), unit: key[0] === 'q', ...this.shipReport() });
+    if (!r.ok && this.target === key) {
       this.target = null;
       toast(r.reason!, 'bad');
     }
@@ -874,14 +911,14 @@ export class Engine {
       const u = b.t / b.dur, dx = b.x1 - b.x0, dy = b.y1 - b.y0, len = Math.hypot(dx, dy) || 1;
       const hx = b.x0 + dx * u, hy = b.y0 + dy * u;
       // A short streak: white-hot head, faction-coloured tail. Misses fade out at the end of their range.
-      const fade = b.hit ? 1 : Math.min(1, (1 - u) * 4);
-      for (let k = 0; k < 9; k++) {
+      const fade = b.hit ? 1 : Math.min(1, (1 - u) * 4), n = b.small ? 4 : 9;
+      for (let k = 0; k < n; k++) {
         const px = Math.round(hx - (dx / len) * k), py = Math.round(hy - (dy / len) * k);
-        e.globalAlpha = (1 - k / 10) * fade;
-        e.fillStyle = k < 2 ? '#ffffff' : b.col;
+        e.globalAlpha = (1 - k / (n + 1)) * fade;
+        e.fillStyle = k < (b.small ? 1 : 2) ? '#ffffff' : b.col;
         e.fillRect(px, py, 1, 1);
       }
-      l.globalAlpha = 0.5;
+      l.globalAlpha = b.small ? 0.25 : 0.5;
       l.drawImage(assets.light(b.col), hx - 10, hy - 10, 20, 20);
     }
     e.globalAlpha = l.globalAlpha = 1;
@@ -889,7 +926,7 @@ export class Engine {
 
   /** Damaged structures smoke, spark while under fire and burn when nearly gone; plus a health bar and target brackets. */
   private drawStructureDamage(s: Structure, x: number, y: number, t: number, now: number, dt: number) {
-    const hp = hpOf(s, now) / STRUCT[s.kind].hp, targeted = s.id === this.target || s.id === this.aimAt;
+    const key = `s${s.id}`, hp = hpOf(s, now) / STRUCT[s.kind].hp, targeted = key === this.target || key === this.aimAt || s.id === this.orderAt;
     if (hp >= 1 && !targeted) return;
     const c = this.col.ctx, e = this.emit.ctx, r = () => Math.random() - 0.5;
     const cx = x + CX, gy = y + CY, spot = () => [cx + r() * 16, gy - 8 - Math.random() * 22] as const;
@@ -1251,7 +1288,10 @@ export class Engine {
       this.drawWrecks(c, e);
     }
     if (zoom > MAP_FADE[1] && !this.wreck) this.drawFlagship(t);
-    if (zoom >= 1) this.drawBolts(e, l);
+    if (zoom >= 1) {
+      this.drawBolts(e, l);
+      this.drawSquadOverlays(e, t);
+    }
     this.drawReticle(e, t);
     for (const { x, y, t: bt, size, ring, gy } of this.booms) {
       // Flash that lights the surrounding plates, fading fast.
@@ -1271,7 +1311,10 @@ export class Engine {
       }
     }
     l.globalAlpha = 1;
-    if (mapA > 0) this.drawFlagshipMarker(mapA, k);
+    if (mapA > 0) {
+      this.drawSquadMarkers(mapA, k);
+      this.drawFlagshipMarker(mapA, k);
+    }
     this.drawOverlays(t, k);
     if (this.debug) this.drawDebug(ox, oy, wx1, wy1, k);
   }
@@ -1339,6 +1382,7 @@ export class Engine {
         this.drawStructure(s, tileX(col, r), tileY(r), t, now);
         this.drawStructureDamage(s, tileX(col, r), tileY(r), t, now, dt);
       }
+      for (const tr of this.troopRows.get(r) ?? []) this.drawTrooper(tr);
     }
   }
 
@@ -1635,7 +1679,7 @@ export class Engine {
 
   /** Repair beam: a jittering green arc from the bay's arm to the hull, lit where it lands. */
   private drawRepairBeam(x1: number, y1: number, t: number) {
-    const e = this.emit.ctx, l = this.light.ctx, { x, y } = this.repair!, x0 = x - 6, y0 = y - 22;
+    const e = this.emit.ctx, l = this.light.ctx, { x, y } = this.repair!, x0 = x - 6, y0 = y - 35;
     const len = Math.hypot(x1 - x0, y1 - y0), nx = -(y1 - y0) / len, ny = (x1 - x0) / len;
     const seed = Math.floor(t * 20);
     e.fillStyle = '#7dffb0';
@@ -1650,6 +1694,230 @@ export class Engine {
     l.globalAlpha = 0.25 + 0.15 * Math.sin(t * 30);
     l.drawImage(assets.light('#7dffb0'), x1 - 20, y1 - 20, 40, 40);
     e.globalAlpha = l.globalAlpha = 1;
+  }
+
+  // ---------------------------------------------------------------- ground war
+  /** Select a Mech Bay and press T (or the panel button): the next click picks what its squad assaults. */
+  deploySelected() {
+    const s = this.selected && this.view.structure(...this.selected);
+    if (!s || s.kind !== 'mechbay' || s.owner !== this.view.meta!.player) return;
+    if (progressOf(s, this.view.now()) < 1) return toast('The Mech Bay is still being built', 'bad');
+    this.setAim(false);
+    this.setBuildMode(null);
+    this.deployFrom = s.id;
+    this.hud.set({ deploying: true });
+  }
+
+  cancelDeploy() {
+    if (this.deployFrom === null) return;
+    this.deployFrom = this.orderAt = null;
+    this.hud.set({ deploying: false });
+  }
+
+  /** Seconds until a Mech Bay can send another squad, as far as this client knows. */
+  deployCooldown(id: number) {
+    return Math.max(0, (this.deployReadyAt.get(id) ?? 0) - this.view.now());
+  }
+
+  private async orderAssault() {
+    const from = this.deployFrom!, target = this.orderAt;
+    if (target === null) return toast('Pick an enemy structure to assault', 'bad');
+    if (!this.mouse.shift) this.cancelDeploy(); // shift-click keeps the order open
+    // Start the countdown now so the panel shows it straight away; undo if the shard says no.
+    this.deployReadyAt.set(from, this.view.now() + DEPLOY_COOLDOWN);
+    const r = await this.view.deploy(from, target);
+    if (!r.ok) {
+      this.deployReadyAt.delete(from);
+      return toast(r.reason!, 'bad');
+    }
+    toast('Mech deployed', 'good');
+  }
+
+  /**
+   * Squads are plans on the server clock: work out where every trooper is,
+   * play the falls the shard's health line implies, and add the cosmetic fire
+   * (troopers on their target, Pulse Batteries on troopers).
+   */
+  private updateSquads(dt: number) {
+    const now = this.view.now(), rows = this.troopRows, me = this.view.meta!.player, r = () => Math.random() - 0.5;
+    rows.clear();
+    if (this.deployFrom !== null) {
+      if (!this.view.structures.has(this.deployFrom)) this.cancelDeploy();
+      const m = this.mouseWorld(), s = this.mouse.inside ? this.structureAt(m.x, m.y) : null;
+      this.orderAt = s && s.owner !== me ? s.id : null;
+    }
+    const fxOn = this.cam.zoom >= 1 && this.parts.length < 900;
+    // Frames are cached per faction; fill in the rest a little at a time while mechs are around.
+    for (const o of new Set([...this.view.squads.values()].map((q) => q.owner))) warmMechs(o, 1.5);
+    for (const q of this.view.squads.values()) {
+      const at = squadAt(q, now), alive = aliveOf(q, now);
+      let fx = this.squadFx.get(q.id);
+      if (!fx) this.squadFx.set(q.id, (fx = { alive: q.size, shot: Math.random(), turret: Math.random(), flash: -1 }));
+      const pos = (i: number) => {
+        const [ox, oy] = trooperOffset(i, q.size, at.dx, at.dy, at.arrived);
+        return [at.x + ox, at.y + oy] as const;
+      };
+      // The pool dropped a step: that many troopers go down, last in line first.
+      for (let i = alive; i < fx.alive; i++) this.trooperDown(...pos(i), q.owner, modelYaw(Math.atan2(at.dy, at.dx)));
+      fx.alive = Math.min(fx.alive, alive);
+      const target = at.arrived ? this.view.structures.get(q.target) : undefined;
+      fx.flash = -1;
+      if (fxOn && target && alive) {
+        fx.shot += dt * alive * 3;
+        for (; fx.shot >= 1; fx.shot--) {
+          const i = Math.floor(Math.random() * alive), [px, py] = pos(i);
+          const x1 = tileX(target.col, target.row) + CX + r() * 14, y1 = tileY(target.row) + CY - 6 - Math.random() * 20;
+          // From the cannon's muzzle, wherever the mech is facing.
+          const [mx, my] = projectPoint(MUZZLE, trooperFrame(q.owner, 0, modelYaw(Math.atan2(y1 - py, x1 - px))).yaw, 0);
+          const x0 = px + mx, y0 = py - TROOPER_LIFT + my;
+          this.bolts.push({ x0, y0, x1, y1, t: 0, dur: Math.hypot(x1 - x0, y1 - y0) / 420, col: FACTIONS[q.owner].color, hit: true, small: true });
+          fx.flash = i;
+        }
+      }
+      if (fxOn && q.attackers.length && alive) {
+        fx.turret += dt * 2.4 * q.attackers.length;
+        for (; fx.turret >= 1; fx.turret--) {
+          const g = this.view.structures.get(q.attackers[Math.floor(Math.random() * q.attackers.length)]);
+          if (!g) continue;
+          // From one of the battery's two barrels to a trooper.
+          const x0 = tileX(g.col, g.row) + CX - 17, y0 = tileY(g.row) + CY - 24 + (Math.random() < 0.5 ? 0 : 3);
+          const [tx, ty] = pos(Math.floor(Math.random() * alive));
+          this.bolts.push({ x0, y0, x1: tx + r() * 4, y1: ty - TROOPER_CHEST, t: 0, dur: Math.hypot(tx - x0, ty - y0) / 650, col: FACTIONS[g.owner].color, hit: true });
+          this.parts.push({ x: x0, y: y0, vx: r() * 30, vy: r() * 30, life: 0.12, max: 0.12, col: '#ffffff' });
+        }
+      }
+      const step = Math.floor(now * 6);
+      for (let i = 0; i < alive; i++) {
+        const [x, y] = pos(i), row = Math.floor((y - CY) / RH);
+        let list = rows.get(row);
+        if (!list) rows.set(row, (list = []));
+        // Face the target once there, the way of the march before that.
+        const hx = target ? tileX(target.col, target.row) + CX - x : at.dx, hy = target ? tileY(target.row) + CY - y : at.dy;
+        const pose = at.arrived ? 0 : WALK[(step + i) & 3];
+        list.push({ x, y, owner: q.owner, yaw: modelYaw(Math.atan2(hy, hx)), pose, flash: i === fx.flash });
+      }
+    }
+    for (const id of this.squadFx.keys()) if (!this.view.squads.has(id)) this.squadFx.delete(id);
+  }
+
+  /** A squad left the board. Killed squads lose whoever was still standing; stood-down ones just go. */
+  private squadGone(q: Squad) {
+    const now = this.view.now(), fx = this.squadFx.get(q.id);
+    this.squadFx.delete(q.id);
+    if (hpOf(q, now) > 1 || !fx) return;
+    const at = squadAt(q, now);
+    for (let i = 0; i < fx.alive; i++) {
+      const [ox, oy] = trooperOffset(i, q.size, at.dx, at.dy, at.arrived);
+      this.trooperDown(at.x + ox, at.y + oy, q.owner, modelYaw(Math.atan2(at.dy, at.dx)));
+    }
+  }
+
+  /** A mech goes down like a ship: its voxels blown apart, a fireball and shockwave, and smoking wreckage left on the deck. */
+  private trooperDown(x: number, y: number, owner: number, yaw: number) {
+    if (this.cam.zoom < 1) return;
+    const r = () => Math.random() - 0.5, oy = y - TROOPER_LIFT;
+    for (const d of shatter(mechModel(0), yaw, 0, accentRamp(FACTIONS[owner].rgb), 380)) {
+      const life = 1.2 + Math.random() * 1.6;
+      this.parts.push({
+        x: x + d.x, y: oy + d.y, vx: d.vx * 1.1, vy: d.vy * 1.1,
+        life, max: life, col: css(d.col), solid: !d.glow, drag: 1.4, size: Math.random() < 0.3 ? 2 : 1,
+      });
+    }
+    this.blast(x, y - TROOPER_CHEST, y, 0.8);
+    for (let i = 0; i < 4; i++) {
+      const life = 4 + Math.random() * 3;
+      this.parts.push({ x: x + r() * 10, y: y + r() * 4, vx: r() * 30, vy: r() * 16, life, max: life, col: i ? '#3a4660' : FACTIONS[owner].color, solid: true, drag: 5, size: 2 });
+    }
+  }
+
+  /** A voxel mech (see trooperArt.ts) on a soft shadow, lit by its visor, with a flash at the cannon when it fires. */
+  private drawTrooper(tr: Trooper) {
+    const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx, x = Math.round(tr.x), y = Math.round(tr.y);
+    const col = FACTIONS[tr.owner].color, { frame, half, yaw } = trooperFrame(tr.owner, tr.pose, tr.yaw);
+    c.globalAlpha = 0.4;
+    c.fillStyle = '#04050a';
+    c.beginPath();
+    c.ellipse(x, y, TROOPER_HALF_W + 2, (TROOPER_HALF_W + 2) * 0.4, 0, 0, Math.PI * 2);
+    c.fill();
+    c.globalAlpha = 1;
+    const sx = Math.round(x - half), sy = Math.round(y - TROOPER_LIFT - half);
+    c.drawImage(frame.color, sx, sy);
+    e.drawImage(frame.emit, sx, sy);
+    if (tr.flash) {
+      const [mx, my] = projectPoint(MUZZLE, yaw, 0), fx = Math.round(x + mx), fy = Math.round(y - TROOPER_LIFT + my);
+      e.fillStyle = '#ffffff';
+      e.fillRect(fx - 1, fy - 1, 2, 2);
+      e.globalAlpha = 0.6;
+      e.fillRect(fx - 3, fy, 6, 1);
+      e.fillRect(fx, fy - 3, 1, 6);
+      l.globalAlpha = 0.6;
+      l.drawImage(assets.light(col), fx - 14, fy - 14, 28, 28);
+    }
+    l.globalAlpha = 0.16;
+    l.drawImage(assets.light(col), x - 18, y - TROOPER_HEIGHT, 36, 36);
+    e.globalAlpha = l.globalAlpha = 1;
+  }
+
+  /** Health bars, lock brackets, your squads' march ahead, and the order line while picking a target. */
+  private drawSquadOverlays(e: CanvasRenderingContext2D, t: number) {
+    const now = this.view.now(), me = this.view.meta!.player;
+    for (const q of this.view.squads.values()) {
+      const at = squadAt(q, now), cx = Math.round(at.x), cy = Math.round(at.y);
+      if (q.owner === me && !at.arrived) {
+        const dots = routeDots(q.route, Math.max(0, now - q.startAt) * q.speed, 8);
+        e.fillStyle = FACTIONS[me].color;
+        for (let i = 0; i < dots.length; i += 2) {
+          e.globalAlpha = 0.15 + 0.2 * (((i >> 1) + Math.floor(t * 6)) % 3 === 0 ? 1 : 0);
+          e.fillRect(Math.round(dots[i]), Math.round(dots[i + 1]), 1, 1);
+        }
+      }
+      const hp = hpOf(q, now) / squadMaxHp(q);
+      if (hp < 1) {
+        e.globalAlpha = 0.9;
+        this.col.ctx.fillStyle = '#04050a';
+        const by = cy - TROOPER_HEIGHT - 8;
+        this.col.ctx.fillRect(cx - 11, by, 22, 4);
+        e.fillStyle = hp > 0.6 ? '#5cff9d' : hp > 0.3 ? '#ffc35c' : '#ff5a70';
+        e.fillRect(cx - 10, by + 1, Math.max(1, Math.round(20 * hp)), 2);
+      }
+      const key = `q${q.id}`;
+      if (key === this.target || key === this.aimAt) {
+        const p = 1 + Math.round(Math.sin(t * 8)), x0 = cx - TROOPER_HALF_W - 4 - p, x1 = cx + TROOPER_HALF_W + 4 + p, y0 = cy - TROOPER_HEIGHT - 3 - p, y1 = cy + 4 + p;
+        e.globalAlpha = 1;
+        e.fillStyle = '#ff5a70';
+        for (const [ax, ay, sx, sy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+          e.fillRect(Math.min(ax, ax + sx * 3), ay, 4, 1);
+          e.fillRect(ax, Math.min(ay, ay + sy * 3), 1, 4);
+        }
+      }
+    }
+    const from = this.deployFrom !== null ? this.view.structures.get(this.deployFrom) : undefined;
+    if (from && this.mouse.inside) {
+      // The order line: from the Mech Bay to the target under the cursor (red) or the cursor itself.
+      const tgt = this.orderAt !== null ? this.view.structures.get(this.orderAt) : undefined;
+      const m = this.mouseWorld();
+      const x0 = tileX(from.col, from.row) + CX, y0 = tileY(from.row) + CY;
+      const x1 = tgt ? tileX(tgt.col, tgt.row) + CX : m.x, y1 = tgt ? tileY(tgt.row) + CY : m.y;
+      const len = Math.hypot(x1 - x0, y1 - y0);
+      e.fillStyle = tgt ? '#ff5a70' : FACTIONS[me].color;
+      for (let d = (t * 30) % 5; d < len; d += 5) {
+        e.globalAlpha = 0.7;
+        e.fillRect(Math.round(x0 + ((x1 - x0) * d) / len), Math.round(y0 + ((y1 - y0) * d) / len), 1, 1);
+      }
+    }
+    e.globalAlpha = 1;
+  }
+
+  /** On the strategic map troopers are sub-pixel: one dot per squad at constant size. */
+  private drawSquadMarkers(alpha: number, k: number) {
+    const e = this.emit.ctx, now = this.view.now(), z = 3 / k;
+    e.globalAlpha = alpha;
+    for (const q of this.view.squads.values()) {
+      const at = squadAt(q, now);
+      e.fillStyle = FACTIONS[q.owner].color;
+      e.fillRect(at.x - z / 2, at.y - z / 2, z, z);
+    }
+    e.globalAlpha = 1;
   }
 
   /** On the strategic map the sprite is sub-pixel, so draw a heading arrow at constant size. */

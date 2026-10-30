@@ -66,6 +66,16 @@ export function AimBanner() {
   );
 }
 
+export function DeployBanner() {
+  const on = useStore(hud, (s) => s.deploying);
+  if (!on) return null;
+  return (
+    <div className="banner f-tip aim">
+      <b>Deploy mech</b> <span className="muted">Click an enemy structure to assault · RMB or Esc to cancel</span>
+    </div>
+  );
+}
+
 export function Toasts() {
   const toasts = useStore(hud, (s) => s.toasts);
   return (

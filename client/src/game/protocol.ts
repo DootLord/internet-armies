@@ -11,7 +11,18 @@ export interface BuildCheck {
   reason?: string;
 }
 
-export interface Structure {
+/**
+ * Health, derived like construction: `hp` at server time `hpAt`, falling at
+ * `drain` per second while something fires on it. Clients compute the live
+ * value every frame; the shard only sends an update when the rate changes.
+ */
+export interface Health {
+  hp: number;
+  hpAt: number;
+  drain: number;
+}
+
+export interface Structure extends Health {
   id: number;
   kind: StructureKind;
   owner: number;
@@ -21,17 +32,9 @@ export interface Structure {
   startedAt: number;
   finishAt: number;
   level: number;
-  /**
-   * Health, derived like construction: `hp` at server time `hpAt`, falling at
-   * `drain` per second while something fires on it. Clients compute the live
-   * value every frame; the shard only sends an update when the rate changes.
-   */
-  hp: number;
-  hpAt: number;
-  drain: number;
 }
 
-export const hpOf = (s: Structure, now: number) => Math.max(0, s.hp - s.drain * Math.max(0, now - s.hpAt));
+export const hpOf = (s: Health, now: number) => Math.max(0, s.hp - s.drain * Math.max(0, now - s.hpAt));
 
 export const progressOf = (s: Structure, now: number) =>
   s.finishAt <= s.startedAt ? 1 : Math.min(1, Math.max(0, (now - s.startedAt) / (s.finishAt - s.startedAt)));
@@ -76,7 +79,29 @@ export interface ShipReport {
 }
 
 export interface FireOrder extends ShipReport {
+  /** A structure id, or a squad id when `unit` is set. */
   target: number;
+  unit?: boolean;
+}
+
+/**
+ * A squad of troopers marching on an enemy structure. Like construction and
+ * health, where it is follows from server time: it walks `route` (flat x,y
+ * world points) at `speed` from `startAt`, then stands and fires on `target`.
+ * The shard sends it again only when that plan changes (a retarget) or its
+ * health rate does. Troopers fall one by one as the shared pool drains.
+ */
+export interface Squad extends Health {
+  id: number;
+  owner: number;
+  target: number;
+  route: number[];
+  startAt: number;
+  speed: number;
+  /** Troopers it set out with; each holds TROOPER_HP of the pool. */
+  size: number;
+  /** Structures shooting at it right now, so clients can draw the fire. */
+  attackers: number[];
 }
 
 /** Somewhere items live: a ship's hold (by ship id), or a Storage Bay / Hangar item bay (by structure id). */
@@ -151,6 +176,8 @@ export interface SourceHandlers {
   event(e: WorldEvent): void;
   cargo(c: CargoState): void;
   fleet(f: FleetState): void;
+  /** Squads that appeared or changed, and ids that are gone (killed or stood down). */
+  squads(changed: Squad[], gone: number[]): void;
 }
 
 export interface WorldSource {
@@ -160,7 +187,7 @@ export interface WorldSource {
   unsubscribe(keys: number[]): void;
   build(kind: StructureKind, col: number, row: number): Promise<BuildCheck>;
   demolish(col: number, row: number): Promise<BuildCheck>;
-  /** Start firing at a structure, or stop with null. One target per shooter. */
+  /** Start firing at a structure or squad, or stop with null. One target per shooter. */
   fire(order: FireOrder | null): Promise<BuildCheck>;
   cargo(op: CargoOp, ship: ShipReport): Promise<BuildCheck>;
   /** Crack open the cache tile at col,row into the ship's hold. */
@@ -169,6 +196,8 @@ export interface WorldSource {
   board(shipId: number, ship: ShipReport): Promise<BuildCheck>;
   /** Replace a ship's whole fit. Needs it docked: flown and in range of a Hangar, or stationed at the one you're docked at. */
   refit(shipId: number, fit: Fit, ship: ShipReport): Promise<BuildCheck>;
+  /** Send a squad from one of your Mech Bays to assault an enemy structure. */
+  deploy(bay: number, target: number): Promise<BuildCheck>;
   /** Server clock in seconds. */
   now(): number;
 }

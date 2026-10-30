@@ -9,8 +9,8 @@ import { fillChunk, KIND_ID, KINDS, TerrainParams, tileCenterX, tileCenterY, VOI
 import { canBuild, WorldRead } from '../rules';
 import { hpOf, progressOf } from '../protocol';
 import type {
-  BuildCheck, CacheResult, CargoOp, CargoState, ChunkDelta, ChunkSnapshot, Container, FireOrder, Overview, PlayerState, ShipReport, SourceHandlers,
-  Structure, WorldEvent, WorldMeta, WorldSource,
+  BuildCheck, CacheResult, CargoOp, CargoState, ChunkDelta, ChunkSnapshot, Container, FireOrder, Health, Overview, PlayerState, ShipReport, SourceHandlers,
+  Squad, Structure, WorldEvent, WorldMeta, WorldSource,
 } from '../protocol';
 import {
   addItem, CACHE_RANGE, CACHE_RESPAWN, cargoGrid, CargoItem, Grid, insertItem, ItemKind, moveItem, removeItem, rollLoot, STORAGE_GRID, STORAGE_RANGE,
@@ -19,6 +19,14 @@ import { computeStats, Fit, weaponStats } from '../ships/fitting';
 import { DOCK_RANGE, FleetState, HANGAR_GRID, ShipRecord, validFit } from '../ships/fleet';
 import { starterFit } from '../ships/hangar';
 import { HULLS } from '../ships/hulls';
+import {
+  aliveOf, arriveAt, DEPLOY_COOLDOWN, findPath, RETARGET_RANGE, routeFrom, SQUAD_COST, SQUAD_SIZE, squadAt, TROOPER_DPS, TROOPER_HP, TROOPER_SPEED, TURRET_DPS,
+  TURRET_RANGE,
+} from '../units';
+
+/** Something that can be shot: a structure or a squad, by id. */
+type Ref = { s: number } | { q: number };
+const sameRef = (a: Ref, b: Ref) => ('s' in a ? 's' in b && a.s === b.s : 'q' in b && a.q === b.q);
 
 export interface ShardOptions {
   seed: number;
@@ -32,6 +40,16 @@ export interface ShardOptions {
 
 const OVERVIEW_CELL = 96;
 
+/** The hex under a world point, near enough for orders and event locations. */
+function tileOf(x: number, y: number): [number, number] {
+  const row = Math.round((y - 14) / 21);
+  return [Math.round((x - 16 - (row & 1) * 16) / 32), row];
+}
+const tileObj = (x: number, y: number) => {
+  const [col, row] = tileOf(x, y);
+  return { col, row };
+};
+
 export class LocalShard implements WorldSource, WorldRead {
   readonly params: TerrainParams;
   private terrain = new Map<number, Uint8Array>();
@@ -39,8 +57,18 @@ export class LocalShard implements WorldSource, WorldRead {
   private owners = new Map<number, number>();
   private structs = new Map<number, Structure>();
   private byId = new Map<number, Structure>();
-  /** What the player is shooting. A real shard keeps one entry per shooter. */
-  private firing: Structure | null = null;
+  /**
+   * Who is shooting whom, keyed by shooter: 'ship' for the player's flagship,
+   * 's<id>' for a Pulse Battery, 'q<id>' for a squad. A target's drain is the
+   * sum of its entries, so health stays a straight line between changes.
+   */
+  private attacks = new Map<string, { target: Ref; dps: number }>();
+  private squads = new Map<number, Squad>();
+  private squadsDirty = new Set<number>();
+  private squadsGone: number[] = [];
+  /** Server time each Mech Bay can deploy again. */
+  private bayReady = new Map<number, number>();
+  private engageAcc = 0;
   /** The player's fleet (a real shard keys these by player), each ship's hold, and every Storage and Hangar bay. */
   private ships = new Map<number, ShipRecord>();
   private flying = 0;
@@ -120,6 +148,8 @@ export class LocalShard implements WorldSource, WorldRead {
     this.sendOverview();
     this.sendFleet();
     this.sendCargo();
+    const all = [...this.squads.values()].map((q) => ({ ...q }));
+    this.send((x) => x.squads(all, []));
     for (const e of [...this.log].reverse()) if (this.visibleEvent(e)) this.send((x) => x.event(e));
     return this.reply({ seed: this.params.seed, radiusPx: this.params.radiusPx, homes: this.homes, player: PLAYER });
   }
@@ -168,18 +198,55 @@ export class LocalShard implements WorldSource, WorldRead {
   fire(order: FireOrder | null): Promise<BuildCheck> {
     this.ceaseFire();
     if (!order) return this.reply({ ok: true });
-    const s = this.byId.get(order.target);
-    if (!s) return this.reply({ ok: false, reason: 'Target lost' });
+    const now = this.now();
+    let at: { x: number; y: number } | null = null, target: Ref;
+    if (order.unit) {
+      const q = this.squads.get(order.target);
+      if (q) at = squadAt(q, now);
+      target = { q: order.target };
+    } else {
+      const s = this.byId.get(order.target);
+      if (s) at = { x: tileCenterX(s.col, s.row), y: tileCenterY(s.row) };
+      target = { s: order.target };
+    }
+    if (!at) return this.reply({ ok: false, reason: 'Target lost' });
     // Damage comes from the fit the shard holds for the ship you're flying, never from the client.
     const me = this.flyingShip();
     const w = weaponStats(me.hull, me.fit, 'pulse-laser');
     if (!w.count) return this.reply({ ok: false, reason: 'No Pulse Laser fitted' });
-    if (Math.hypot(tileCenterX(s.col, s.row) - order.x, tileCenterY(s.row) - order.y) > w.range) return this.reply({ ok: false, reason: 'Out of range' });
-    this.setDrain(s, w.dps);
-    this.firing = s;
-    this.flush();
+    if (Math.hypot(at.x - order.x, at.y - order.y) > w.range) return this.reply({ ok: false, reason: 'Out of range' });
+    this.attack('ship', target, w.dps);
+    this.flushAll();
     return this.reply({ ok: true });
   }
+
+  deploy(bayId: number, targetId: number): Promise<BuildCheck> {
+    const b = this.byId.get(bayId), t = this.byId.get(targetId), now = this.now();
+    const cost = SQUAD_COST as Partial<Res>;
+    let r: BuildCheck = { ok: true };
+    if (!b || b.owner !== PLAYER || b.kind !== 'mechbay') r = { ok: false, reason: 'No Mech Bay' };
+    else if (progressOf(b, now) < 1) r = { ok: false, reason: 'The Mech Bay is still being built' };
+    else if (!t) r = { ok: false, reason: 'Target lost' };
+    else if (t.owner === PLAYER) r = { ok: false, reason: 'Pick an enemy structure' };
+    else if ((this.bayReady.get(b.id) ?? 0) > now) r = { ok: false, reason: `Training: ready in ${Math.ceil(this.bayReady.get(b.id)! - now)}s` };
+    else if (RES_KEYS.some((k) => this.res[k] < (cost[k] ?? 0))) r = { ok: false, reason: 'Not enough resources' };
+    if (!r.ok) return this.reply(r);
+    const path = findPath(this, [b!.col, b!.row], [t!.col, t!.row]);
+    if (!path) return this.reply({ ok: false, reason: 'No route on foot to that target' });
+    for (const k of RES_KEYS) this.res[k] -= cost[k] ?? 0;
+    this.bayReady.set(b!.id, now + DEPLOY_COOLDOWN);
+    const q: Squad = {
+      id: this.nextId++, owner: PLAYER, target: t!.id, route: routeFrom(tileCenterX(b!.col, b!.row), tileCenterY(b!.row), path), startAt: now,
+      speed: TROOPER_SPEED, size: SQUAD_SIZE, attackers: [], hp: SQUAD_SIZE * TROOPER_HP, hpAt: now, drain: 0,
+    };
+    this.squads.set(q.id, q);
+    this.squadsDirty.add(q.id);
+    this.emit({ faction: PLAYER, type: 'info', col: b!.col, row: b!.row, text: `deployed a mech against a ${STRUCT[t!.kind].name}` });
+    this.sendPlayer();
+    this.flushAll();
+    return this.reply({ ok: true });
+  }
+
 
   // ---------------------------------------------------------------- fleet
   private flyingShip() {
@@ -331,18 +398,150 @@ export class LocalShard implements WorldSource, WorldRead {
   }
 
   private ceaseFire() {
-    if (this.firing && this.byId.has(this.firing.id)) this.setDrain(this.firing, 0);
-    this.firing = null;
-    this.flush();
+    this.attack('ship', null);
+    this.flushAll();
+  }
+
+  /** Point a shooter at a target (or stand it down with null) and re-settle the drain on what changed. */
+  private attack(key: string, target: Ref | null, dps = 0) {
+    const prev = this.attacks.get(key);
+    if (prev && target && sameRef(prev.target, target) && prev.dps === dps) return;
+    if (target) this.attacks.set(key, { target, dps });
+    else this.attacks.delete(key);
+    if (prev) this.redrain(prev.target);
+    if (target && !(prev && sameRef(prev.target, target))) this.redrain(target);
+  }
+
+  /** A target's drain is the sum of everything shooting it. */
+  private redrain(t: Ref) {
+    let drain = 0;
+    const turrets: number[] = [];
+    for (const [k, a] of this.attacks)
+      if (sameRef(a.target, t)) {
+        drain += a.dps;
+        if (k[0] === 's') turrets.push(Number(k.slice(1)));
+      }
+    if ('s' in t) {
+      const s = this.byId.get(t.s);
+      if (s && s.drain !== drain) {
+        this.settle(s, drain);
+        this.upsertStruct(s);
+      }
+    } else {
+      const q = this.squads.get(t.q);
+      if (!q) return;
+      if (q.drain !== drain) this.settle(q, drain);
+      q.attackers = turrets;
+      this.squadsDirty.add(q.id);
+    }
   }
 
   /** Settle health at the current time, then change the rate: the only update clients need. */
-  private setDrain(s: Structure, drain: number) {
+  private settle(h: Health, drain: number) {
     const now = this.now();
-    s.hp = hpOf(s, now);
-    s.hpAt = now;
-    s.drain = drain;
-    this.upsertStruct(s);
+    h.hp = hpOf(h, now);
+    h.hpAt = now;
+    h.drain = drain;
+  }
+
+  /** Stop every shot at a target that's gone. */
+  private dropAttacksOn(t: Ref) {
+    for (const [k, a] of [...this.attacks]) if (sameRef(a.target, t)) this.attacks.delete(k);
+  }
+
+  // ---------------------------------------------------------------- ground war
+  /** March, fight, die: squads change state at a few moments, and only then does anything get sent. */
+  private stepSquads(dt: number) {
+    const now = this.now();
+    for (const q of [...this.squads.values()]) {
+      if (hpOf(q, now) <= 0) {
+        this.killSquad(q, true);
+        continue;
+      }
+      if (!this.byId.has(q.target)) {
+        this.retarget(q);
+        continue;
+      }
+      // Fewer troopers, less damage: the target's drain drops as they fall.
+      if (now >= arriveAt(q)) this.attack(`q${q.id}`, { s: q.target }, aliveOf(q, now) * TROOPER_DPS);
+    }
+    this.engageAcc += dt;
+    if (this.engageAcc >= 0.25) {
+      this.engageAcc = 0;
+      this.engage();
+    }
+  }
+
+  /** Pulse Batteries pick the nearest enemy squad in range, and hold on to it while it stays there. */
+  private engage() {
+    const now = this.now();
+    const pos = [...this.squads.values()].map((q) => ({ q, at: squadAt(q, now) }));
+    for (let f = 0; f < FACTIONS.length; f++)
+      for (const t of this.factionStructs[f]) {
+        if (t.kind !== 'turret') continue;
+        const key = `s${t.id}`, cur = this.attacks.get(key);
+        if (!pos.length && !cur) continue;
+        const x = tileCenterX(t.col, t.row), y = tileCenterY(t.row);
+        const inRange = (p: (typeof pos)[number]) => p.q.owner !== f && Math.hypot(p.at.x - x, p.at.y - y) <= TURRET_RANGE;
+        const held = cur && 'q' in cur.target ? pos.find((p) => 'q' in cur.target && p.q.id === cur.target.q) : undefined;
+        if (held && inRange(held)) continue;
+        let best: (typeof pos)[number] | null = null, bd = Infinity;
+        if (progressOf(t, now) >= 1)
+          for (const p of pos) {
+            const d = Math.hypot(p.at.x - x, p.at.y - y);
+            if (inRange(p) && d < bd) { bd = d; best = p; }
+          }
+        this.attack(key, best ? { q: best.q.id } : null, TURRET_DPS);
+      }
+  }
+
+  /** The target fell: march on the nearest enemy structure close by, or stand down. */
+  private retarget(q: Squad) {
+    const now = this.now(), at = squadAt(q, now);
+    this.attack(`q${q.id}`, null);
+    const [col, row] = tileOf(at.x, at.y);
+    let best: Structure | null = null, bd = RETARGET_RANGE;
+    for (const [c, r] of hexesInRadius(col, row, Math.ceil(RETARGET_RANGE / 21))) {
+      const s = this.structure(c, r);
+      if (!s || s.owner === q.owner) continue;
+      const d = Math.hypot(tileCenterX(c, r) - at.x, tileCenterY(r) - at.y);
+      if (d < bd) { bd = d; best = s; }
+    }
+    const path = best && findPath(this, [col, row], [best.col, best.row]);
+    if (!best || !path) {
+      if (q.owner === PLAYER) this.emit({ faction: PLAYER, type: 'info', col, row, text: 'mech found no more targets and stood down' });
+      return this.killSquad(q, false);
+    }
+    q.target = best.id;
+    q.route = routeFrom(at.x, at.y, path);
+    q.startAt = now;
+    this.squadsDirty.add(q.id);
+  }
+
+  private killSquad(q: Squad, killed: boolean) {
+    this.squads.delete(q.id);
+    this.squadsDirty.delete(q.id);
+    this.squadsGone.push(q.id);
+    this.attack(`q${q.id}`, null);
+    this.dropAttacksOn({ q: q.id });
+    if (killed && q.owner === PLAYER) {
+      const at = squadAt(q, this.now());
+      this.emit({ faction: PLAYER, type: 'info', ...tileObj(at.x, at.y), text: 'lost a mech' });
+    }
+  }
+
+  private sendSquads() {
+    if (!this.squadsDirty.size && !this.squadsGone.length) return;
+    const changed = [...this.squadsDirty].map((id) => ({ ...this.squads.get(id)! })), gone = this.squadsGone;
+    this.squadsDirty.clear();
+    this.squadsGone = [];
+    this.send((h) => h.squads(changed, gone));
+  }
+
+  /** Chunk deltas and squad changes go out together. */
+  private flushAll() {
+    this.flush();
+    this.sendSquads();
   }
 
   /**
@@ -362,7 +561,9 @@ export class LocalShard implements WorldSource, WorldRead {
   }
 
   private destroy(s: Structure) {
-    if (this.firing === s) this.firing = null;
+    this.dropAttacksOn({ s: s.id });
+    this.attack(`s${s.id}`, null);
+    this.bayReady.delete(s.id);
     this.removeStruct(s);
     if (this.stores.delete(s.id)) this.sendCargo();
     if (s.kind === 'hangar') this.rehome(s.id);
@@ -472,9 +673,13 @@ export class LocalShard implements WorldSource, WorldRead {
   step(dt: number) {
     const now = this.now();
     for (const s of this.building) if (now >= s.finishAt) { this.building.delete(s); this.complete(s, false); }
-    // No damage ticks: health is a straight line, so just check whether it has reached zero.
-    if (this.firing && !this.byId.has(this.firing.id)) this.firing = null;
-    if (this.firing && hpOf(this.firing, now) <= 0) this.destroy(this.firing);
+    // No damage ticks: health is a straight line, so just check whether whatever is under fire has reached zero.
+    for (const a of [...this.attacks.values()])
+      if ('s' in a.target) {
+        const s = this.byId.get(a.target.s);
+        if (s && hpOf(s, now) <= 0) this.destroy(s);
+      }
+    this.stepSquads(dt);
     for (const [k, at] of this.opened)
       if (now >= at) {
         this.opened.delete(k);
@@ -492,7 +697,7 @@ export class LocalShard implements WorldSource, WorldRead {
       this.aiTimer = 1 + this.rnd() * 2.5;
       this.aiBuild(1 + Math.floor(this.rnd() * (FACTIONS.length - 1)), false);
     }
-    this.flush();
+    this.flushAll();
     this.ovAcc += dt;
     if (this.ovDirty && this.ovAcc > 2) this.sendOverview();
   }
@@ -657,7 +862,7 @@ export class LocalShard implements WorldSource, WorldRead {
       }
       return;
     }
-    const def = this.choose(BUILDABLE.filter((d) => d.place !== 'frontier'));
+    const def = this.choose(BUILDABLE.filter((d) => d.place !== 'frontier' && d.kind !== 'mechbay')); // AI defends only, for now
     const spot = this.randomOwned(f, def.place === 'deposit');
     if (!spot) return;
     this.place(def.kind, spot[0], spot[1], f, instant);

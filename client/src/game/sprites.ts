@@ -566,6 +566,24 @@ const PAINT: Record<StructureKind, (p: Painter) => void> = {
     p.glow(33, 13, a[4]);
     p.beacons.push([33, 13]);
   },
+  mechbay(p) {
+    const a = p.acc;
+    p.prism(20, 42, 16, 3, S, -0.05);
+    // Squat armoured block with a lit drop door, a bunk wing and a banner mast.
+    p.prism(16, 28, 11, 11, S, 0.03);
+    for (let x = 10; x < 18; x++) {
+      const yf = p.prismFront(16, 28, 11, x);
+      for (let y = yf + 4; y < yf + 11; y++) p.px(x, y, y === yf + 4 ? S[5] : S[0]);
+      if (x % 2) p.glow(x, yf + 10, a[2], 190);
+    }
+    for (let x = 6; x < 27; x += 3) p.glow(x, p.prismFront(16, 28, 11, x) + 1, a[3], 160);
+    p.prism(30, 33, 6, 6, S, 0.02);
+    for (let x = 26; x < 35; x += 2) p.glow(x, p.prismFront(30, 33, 6, x) + 3, C_AMBER, 150);
+    p.line(33, 33, 33, 10, S[6]); p.line(34, 33, 34, 10, S[3]);
+    for (let y = 11; y < 17; y++) for (let x = 35; x < 35 + Math.max(2, 5 - ((y - 11) >> 1)); x++) p.glow(x, y, a[3], 210);
+    p.glow(33, 9, a[4]);
+    p.beacons.push([33, 9]);
+  },
   repair(p) {
     const a = p.acc;
     p.prism(20, 41, 14, 3, S, -0.04);

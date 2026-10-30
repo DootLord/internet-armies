@@ -4,6 +4,7 @@ import { HULLS, hullSprites } from '../game/ships/hulls';
 import { YAW_STEPS } from '../game/ships/voxel';
 import { ItemKind, ITEMS } from '../game/ships/cargo';
 import { itemPose, itemSpan } from '../game/itemArt';
+import { trooperFrame } from '../game/trooperArt';
 
 const cols = YAW_STEPS / 4, scale = 3;
 for (const h of HULLS) {
@@ -49,4 +50,27 @@ for (const kind of Object.keys(ITEMS) as ItemKind[]) {
   name.textContent = ITEMS[kind].name;
   row.append(name);
   document.body.append(row);
+}
+
+// Mechs: 16 of the 32 facings for each pose (stand/fire, then the four-step walk), two factions.
+for (const owner of [0, 2]) {
+  const first = trooperFrame(owner, 0, 0), S = first.half * 2, dirs = 16;
+  const label = document.createElement('div');
+  label.textContent = `Mech · faction ${owner} · ${S}px`;
+  label.style.marginTop = '16px';
+  const cv = document.createElement('canvas');
+  cv.width = dirs * S;
+  cv.height = S * 5;
+  cv.style.width = `${cv.width * 2}px`;
+  cv.style.imageRendering = 'pixelated';
+  const g = cv.getContext('2d')!;
+  for (let pose = 0; pose < 5; pose++)
+    for (let i = 0; i < dirs; i++) {
+      const { frame } = trooperFrame(owner, pose, (i / dirs) * Math.PI * 2);
+      g.drawImage(frame.color, i * S, pose * S);
+      g.globalCompositeOperation = 'lighter';
+      g.drawImage(frame.emit, i * S, pose * S);
+      g.globalCompositeOperation = 'source-over';
+    }
+  document.body.append(label, cv);
 }

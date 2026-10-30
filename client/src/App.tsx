@@ -6,7 +6,7 @@ import { DebugPanel } from './ui/DebugPanel';
 import { HangarWindow } from './ui/HangarWindow';
 import { Feed } from './ui/Feed';
 import { Minimap } from './ui/Minimap';
-import { AimBanner, BuildBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
+import { AimBanner, BuildBanner, DeployBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
 import { SelectionPanel } from './ui/SelectionPanel';
 import { ShipPanel } from './ui/ShipPanel';
 import { ShipStatus } from './ui/ShipStatus';
@@ -55,6 +55,7 @@ export function App() {
           <BuildBanner />
           <PilotBanner />
           <AimBanner />
+          <DeployBanner />
           <Toasts />
           <Minimap />
           <SelectionPanel />

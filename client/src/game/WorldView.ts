@@ -9,7 +9,7 @@ import { fillChunk, KINDS, TerrainParams } from './terrain';
 import { canBuild, isAdjacentTo, WorldRead } from './rules';
 import type { Fit } from './ships/fitting';
 import type { FleetState } from './ships/fleet';
-import type { BuildCheck, CargoOp, CargoState, ChunkDelta, FireOrder, ShipReport, ChunkSnapshot, Overview, PlayerState, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
+import type { BuildCheck, CargoOp, CargoState, ChunkDelta, FireOrder, ShipReport, ChunkSnapshot, Overview, PlayerState, Squad, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
 
 /** Beyond this many chunks in view, stop per-chunk streaming and rely on the overview. */
 export const MAX_DETAIL_CHUNKS = 300;
@@ -37,6 +37,8 @@ export interface ViewListeners {
   destroyed?: (s: Structure) => void;
   cargo?: (c: CargoState) => void;
   fleet?: (f: FleetState) => void;
+  /** A squad vanished: killed (its health ran out) or stood down. */
+  squadGone?: (q: Squad) => void;
 }
 
 export class WorldView implements WorldRead {
@@ -51,6 +53,8 @@ export class WorldView implements WorldRead {
   cargo: CargoState | null = null;
   /** The player's ships, as the shard last reported them. */
   fleet: FleetState | null = null;
+  /** Every squad on the map. Few enough to send them all for now; a real shard would filter by interest. */
+  readonly squads = new Map<number, Squad>();
   log: WorldEvent[] = [];
   listeners: ViewListeners = {};
   detail = true;
@@ -73,6 +77,14 @@ export class WorldView implements WorldRead {
       fleet: (f) => {
         this.fleet = f;
         this.listeners.fleet?.(f);
+      },
+      squads: (changed, gone) => {
+        for (const q of changed) this.squads.set(q.id, q);
+        for (const id of gone) {
+          const q = this.squads.get(id);
+          this.squads.delete(id);
+          if (q) this.listeners.squadGone?.(q);
+        }
       },
       player: (p) => {
         this.player = p;
@@ -152,6 +164,10 @@ export class WorldView implements WorldRead {
 
   refit(shipId: number, fit: Fit, ship: ShipReport) {
     return this.source.refit(shipId, fit, ship);
+  }
+
+  deploy(bay: number, target: number) {
+    return this.source.deploy(bay, target);
   }
 
   // ---------------------------------------------------------------- streaming
