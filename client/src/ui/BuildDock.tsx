@@ -18,7 +18,7 @@ export function BuildDock() {
               className={`pbtn card ${mode === d.kind ? 'on' : ''} ${afford ? '' : 'poor'}`}
               onClick={() => getEngine()?.setBuildMode(mode === d.kind ? null : d.kind)}
             >
-              <kbd className="card-key">{i + 1}</kbd>
+              {i < 10 && <kbd className="card-key">{(i + 1) % 10}</kbd>}
               <SpriteIcon kind={d.kind} k={0.5} />
               <span className="card-name">{d.name}</span>
               <span className="card-tip f-tip">

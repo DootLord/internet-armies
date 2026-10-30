@@ -1,12 +1,11 @@
 import { CSSProperties, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { cargo, getEngine, toast, world } from '../game/game';
+import { cargo, fleet, getEngine, toast, world } from '../game/game';
 import type { CargoOp, CargoState, Container } from '../game/protocol';
-import { canPlace, cargoGrid, CargoItem, footprint, Grid, inGrid, insertItem, ItemKind, ITEMS, moveItem, removeItem, STORAGE_GRID, usedCells } from '../game/ships/cargo';
-import { computeStats, Fit } from '../game/ships/fitting';
-import type { HullId } from '../game/ships/hulls';
+import { canPlace, CARGO_COLS, cargoGrid, CargoItem, footprint, Grid, inGrid, insertItem, ItemKind, ITEMS, moveItem, removeItem, STORAGE_GRID, usedCells } from '../game/ships/cargo';
+import { computeStats } from '../game/ships/fitting';
+import { HANGAR_GRID } from '../game/ships/fleet';
 import { itemPose, itemSpan } from '../game/itemArt';
-import { useStore } from '../game/store';
 
 /** One grid on screen: a ship hold or a Storage. `locked` explains why it can't be touched right now. */
 export interface Bay {
@@ -23,10 +22,20 @@ interface Drag { bay: string; uid: number; rot: boolean; gx: number; gy: number;
 
 const cells = (n: number) => `calc(var(--cell) * ${n})`;
 
-export const gridOf = (c: Container): Grid => ('ship' in c ? cargoGrid(computeStats(c.ship, c.fit).cargo) : STORAGE_GRID);
-const itemsOf = (s: CargoState, c: Container) => ('ship' in c ? s.holds[c.ship] : s.stores[c.storage]) ?? [];
+/** A container's grid: a ship's comes from its fitted cargo stat, a building's is fixed by its kind. */
+export function gridOf(c: Container): Grid {
+  if ('ship' in c) {
+    const sh = fleet.get().ships.find((s) => s.id === c.ship);
+    return sh ? cargoGrid(computeStats(sh.hull, sh.fit).cargo) : { w: CARGO_COLS, h: 2 };
+  }
+  return world.structures.get(c.store)?.kind === 'hangar' ? HANGAR_GRID : STORAGE_GRID;
+}
+export const itemsOf = (s: CargoState, c: Container) => ('ship' in c ? s.holds[c.ship] : s.stores[c.store]) ?? [];
 const withItems = (s: CargoState, c: Container, v: CargoItem[]): CargoState =>
-  'ship' in c ? { ...s, holds: { ...s.holds, [c.ship]: v } } : { ...s, stores: { ...s.stores, [c.storage]: v } };
+  'ship' in c ? { ...s, holds: { ...s.holds, [c.ship]: v } } : { ...s, stores: { ...s.stores, [c.store]: v } };
+
+/** A Bay for any container, read from a cargo snapshot. */
+export const bayOf = (s: CargoState, key: string, label: string, c: Container, locked?: string): Bay => ({ key, label, container: c, items: itemsOf(s, c), grid: gridOf(c), locked });
 
 /**
  * Apply a cargo op to the local copy straight away (same rules as the shard),
@@ -51,18 +60,6 @@ function commit(op: CargoOp) {
   const ship = getEngine()?.shipReport();
   if (ship) void world.cargoOp(op, ship).then((r) => r.ok || toast(r.reason!, 'bad'));
   if (op.op === 'jettison') toast(`Jettisoned ${ITEMS[it.kind].name}`);
-}
-
-/** The hangar's Cargo tab: one hull's hold, rearranged in place. */
-export function HangarHold({ hull, fit }: { hull: HullId; fit: Fit }) {
-  const items = useStore(cargo, (s) => s.holds[hull]) ?? [];
-  const c: Container = { ship: hull, fit };
-  return (
-    <CargoBays
-      bays={[{ key: 'hold', label: 'Cargo hold', container: c, items, grid: gridOf(c) }]}
-      hint="Drag items to pack the hold. Its size comes from the hull's cargo stat, and Hold Expanders make it bigger. Find items by opening caches."
-    />
-  );
 }
 
 /** A rendered voxel item, centred on its footprint. `live` sways it gently, for hover and while carried. */

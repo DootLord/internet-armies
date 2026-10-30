@@ -1,6 +1,7 @@
 import { emptyRes, Res, StructureKind, TileKind } from './defs';
 import type { Engine } from './engine';
 import type { CargoState, WorldEvent } from './protocol';
+import type { FleetState, ShipRecord } from './ships/fleet';
 import type { Vitals } from './ships/vitals';
 import { LocalShard } from './sim/LocalShard';
 import { createStore } from './store';
@@ -37,12 +38,15 @@ export interface HudState {
   sectors: number;
   zoom: number;
   pilot: boolean;
-  fittingOpen: boolean;
+  /** G: the flown ship's loadout and cargo. */
+  shipOpen: boolean;
+  /** Hangar whose window is open (structure id). */
+  hangarOpen: number | null;
   /** Mouse mode: aiming weapons rather than selecting and placing. */
   aim: boolean;
   /** Storage Bay whose window is open (structure id). */
   storageOpen: number | null;
-  ship: Vitals & { refuelling: boolean; wrecked: boolean; firing: boolean };
+  ship: Vitals & { refuelling: boolean; repairing: boolean; wrecked: boolean; firing: boolean };
 }
 
 // ?radius=40000 (world px) for stress tests; the default disc is ~0.9M hex slots.
@@ -62,17 +66,22 @@ export const hud = createStore<HudState>({
   sectors: 0,
   zoom: 3,
   pilot: false,
-  fittingOpen: false,
+  shipOpen: false,
+  hangarOpen: null,
   aim: false,
   storageOpen: null,
-  ship: { hp: 0, maxHp: 0, fuel: 0, maxFuel: 0, refuelling: false, wrecked: false, firing: false },
+  ship: { hp: 0, maxHp: 0, fuel: 0, maxFuel: 0, refuelling: false, repairing: false, wrecked: false, firing: false },
 });
 
 /** Cargo as the client shows it: the shard's state, with the player's moves applied ahead of confirmation. */
-export const cargo = createStore<CargoState>({ holds: { wisp: [], lancer: [], bastion: [], mule: [] }, stores: {} });
+export const cargo = createStore<CargoState>({ holds: {}, stores: {} });
+/** The player's ships, as the shard reports them (refits applied ahead of confirmation). */
+export const fleet = createStore<FleetState>({ ships: [], flying: 0 });
+export const flyingShip = (f: FleetState = fleet.get()): ShipRecord | undefined => f.ships.find((s) => s.id === f.flying);
 
 world.listeners = {
   cargo: (c) => cargo.set(c),
+  fleet: (f) => fleet.set(f),
   event: () => hud.set({ feed: world.log }),
   player: (p) => hud.set({ res: p.res, rates: p.rates, sectors: p.sectors, cycle: p.cycle }),
 };

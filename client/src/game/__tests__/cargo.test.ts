@@ -67,7 +67,7 @@ describe('caches', () => {
     expect(r.ok).toBe(true);
     expect(r.loot!.length).toBeGreaterThanOrEqual(2);
     advance(0.2);
-    expect(view.cargo!.holds.lancer.length).toBe(r.loot!.length);
+    expect(view.cargo!.holds[view.fleet!.flying].length).toBe(r.loot!.length);
     expect(view.kind(...spot)).toBe('cacheOpen');
     expect((await view.openCache(...spot, ship(...spot))).ok).toBe(false);
 
@@ -87,15 +87,15 @@ describe('storage', () => {
     await view.build('storage', ...spot);
     advance(STRUCT.storage.buildTime + 1);
     const store = view.structure(...spot)!;
-    const near = ship(...spot), item = view.cargo!.holds.lancer[0];
-    const op = { op: 'move' as const, from: { ship: 'lancer' as const, fit: near.fit }, uid: item.uid, to: { storage: store.id }, x: 0, y: 0, rot: false };
+    const me = view.fleet!.flying, near = ship(...spot), item = view.cargo!.holds[me][0];
+    const op = { op: 'move' as const, from: { ship: me }, uid: item.uid, to: { store: store.id }, x: 0, y: 0, rot: false };
 
     const refused = await view.cargoOp(op, { ...near, x: near.x + STORAGE_RANGE * 3 });
     expect(refused.ok).toBe(false);
     expect((await view.cargoOp(op, near)).ok).toBe(true);
     advance(0.2);
     expect(view.cargo!.stores[store.id].map((i) => i.uid)).toEqual([item.uid]);
-    expect(view.cargo!.holds.lancer.some((i) => i.uid === item.uid)).toBe(false);
+    expect(view.cargo!.holds[me].some((i) => i.uid === item.uid)).toBe(false);
 
     // Destroyed with it.
     await view.fire({ ...near, target: store.id });

@@ -18,6 +18,9 @@ export const DRY_SPEED = 0.2;
 /** Fuel Depots refuel ships within this many world px, at this share of the tank per second. */
 export const DEPOT_RANGE = 80;
 export const REFUEL_RATE = 0.3;
+/** Repair Bays patch up ships within this range, at this share of max health per second (empty to full in ~17s). */
+export const REPAIR_RANGE = 80;
+export const REPAIR_RATE = 0.06;
 
 /** One health pool for now; shield, armor and hull can become layers once ships take real damage. */
 export const maxHp = (st: ShipStats) => st.shield + st.armor + st.hull;

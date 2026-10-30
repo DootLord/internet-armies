@@ -426,6 +426,8 @@ export function fractureSprite(src: { color: HTMLCanvasElement; emit: HTMLCanvas
 }
 
 const S = STEEL;
+/** Repair green: weld light and the Repair Bay's markings. */
+const C_MEND: RGB = [125, 255, 176];
 const PAINT: Record<StructureKind, (p: Painter) => void> = {
   nexus(p) {
     const a = p.acc;
@@ -564,6 +566,23 @@ const PAINT: Record<StructureKind, (p: Painter) => void> = {
     p.glow(33, 13, a[4]);
     p.beacons.push([33, 13]);
   },
+  repair(p) {
+    const a = p.acc;
+    p.prism(20, 41, 14, 3, S, -0.04);
+    // Landing cradle: a lit ring on the deck where ships hover for welding.
+    ell(21, 38, 8, 3, (x, y, q) => { if (q > 0.7) p.glow(x, y, C_MEND, 170); });
+    // Parts cabinet with a green cross.
+    p.prism(9, 31, 5, 8, S, 0.02);
+    for (const [x, y] of [[9, 33], [9, 34], [9, 35], [8, 34], [10, 34]]) p.glow(x, y, C_MEND, 230);
+    // Gantry: mast, boom and a hanging welding head.
+    p.line(31, 40, 31, 9, S[6]); p.line(32, 40, 32, 9, S[3]);
+    p.line(31, 9, 14, 9, S[6]); p.line(31, 10, 16, 10, S[3]);
+    p.line(14, 9, 14, 12, S[5]); p.line(13, 11, 15, 11, S[4]);
+    p.glow(14, 13, C_MEND);
+    for (let x = 8; x < 33; x += 4) p.glow(x, p.prismFront(20, 41, 14, x) + 2, a[2], 180);
+    p.glow(31, 8, a[4]);
+    p.beacons.push([31, 8]);
+  },
   storage(p) {
     const a = p.acc;
     p.prism(20, 41, 15, 3, S, -0.04);
@@ -579,6 +598,22 @@ const PAINT: Record<StructureKind, (p: Painter) => void> = {
     p.glow(22, 17, C_AMBER, 220);
     p.glow(35, 11, a[4]);
     p.beacons.push([35, 11]);
+  },
+  hangar(p) {
+    const a = p.acc;
+    p.prism(20, 42, 17, 3, S, -0.05);
+    // A long hall under a curved roof, its bay door open and lit from inside.
+    p.prism(20, 30, 14, 10, S, 0.02);
+    p.dome(20, 30, 13, 7, S, 0.04);
+    for (let x = 9; x < 19; x++) {
+      const yf = p.prismFront(20, 30, 14, x);
+      for (let y = yf + 3; y < yf + 10; y++) p.px(x, y, y === yf + 3 ? S[5] : S[0]);
+      p.glow(x, yf + 9, a[2], 170);
+    }
+    for (let x = 5; x < 36; x += 4) p.glow(x, p.prismFront(20, 42, 17, x) + 2, x % 8 === 1 ? C_WHITE : a[3], 200);
+    p.line(31, 27, 31, 15, S[6]); p.line(32, 27, 32, 15, S[3]);
+    p.glow(31, 14, a[4]);
+    p.beacons.push([31, 14]);
   },
 };
 

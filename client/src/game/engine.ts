@@ -1,5 +1,5 @@
 import { BUILDABLE, FACTIONS, STRUCT, StructureKind, TileKind } from './defs';
-import { HudState, TileSnap, toast } from './game';
+import { fleet, flyingShip, HudState, TileSnap, toast } from './game';
 import { CX, CY, neighbor, pick, RH, TW, tileX, tileY } from './hex';
 import { Post } from './post';
 import { assets, fractureSprite, SOX, SOY, SpriteShard, STAR_DOMAIN, TILE_PAD } from './sprites';
@@ -11,14 +11,14 @@ import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
 import { clamp, hash2, smoothstep } from './rng';
 import type { WorldView } from './WorldView';
 import { computeStats, flightParams, weaponStats } from './ships/fitting';
-import { hangar } from './ships/hangar';
+import { starterFit } from './ships/hangar';
 import { HULL, HullDef, hullSprites } from './ships/hulls';
 import { shipHits } from './ships/shapes';
 import { ITEMS } from './ships/cargo';
 import { autopilot, FlightInput, FlightParams, FlightState, newFlight, stepFlight } from './ships/flight';
 import { BANK_ANGLE, BANK_LEVELS, PITCH_SIN, projectPoint, shatter, ShipSprites, splitModel } from './ships/voxel';
 import { accentRamp, css } from './palette';
-import { DEPOT_RANGE, dryFlight, fuelBurn, fullVitals, REFUEL_RATE, refitVitals, Vitals } from './ships/vitals';
+import { DEPOT_RANGE, dryFlight, fuelBurn, fullVitals, REFUEL_RATE, refitVitals, REPAIR_RANGE, REPAIR_RATE, Vitals } from './ships/vitals';
 
 interface Layer { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D }
 const layer = (): Layer => {
@@ -105,8 +105,12 @@ export class Engine {
   private flight!: FlightParams;
   private flightDry!: FlightParams;
   private vitals!: Vitals;
+  /** Which fleet ship we're flying, to tell a hull swap from a refit. */
+  private flyingId = -1;
   /** The Fuel Depot currently topping up the tank, for drawing the fuel line. */
   private depot: { x: number; y: number } | null = null;
+  /** The Repair Bay currently welding the hull, for drawing its beam. */
+  private repair: { x: number; y: number } | null = null;
   private shipTarget: { x: number; y: number } | null = null;
   /** Seconds until the flagship reappears after exploding, and the fireball's light. */
   private wreck = 0;
@@ -148,7 +152,7 @@ export class Engine {
     this.cam.y = tileY(home.row) + CY;
     this.ship = newFlight(this.cam.x + 48, this.cam.y + 30, -Math.PI / 2);
     this.applyHangar();
-    this.cleanup.push(hangar.subscribe(() => this.applyHangar()));
+    this.cleanup.push(fleet.subscribe(() => this.applyHangar()));
     // Deep-link: ?at=col,row&zoom=4 (or ?at=f2 for a faction's home).
     const q = new URLSearchParams(location.search);
     const at = q.get('at');
@@ -168,7 +172,7 @@ export class Engine {
       this.demo = [0, 1, 2, 3].map((i) => ({ x: this.ship.x + Math.cos(i * 1.7) * 260, y: this.ship.y + Math.sin(i * 1.7) * 170 }));
       this.setPilot(true);
     }
-    if (import.meta.env.DEV && q.has('hangar')) this.hud.set({ fittingOpen: true });
+    if (import.meta.env.DEV && q.has('ship')) this.hud.set({ shipOpen: true });
     view.listeners.destroyed = (s) => this.explodeStructure(s);
     this.cleanup.push(() => (view.listeners.destroyed = undefined));
     this.bindInput();
@@ -240,16 +244,22 @@ export class Engine {
     this.hud.set({ pilot: on });
   }
 
-  /** Fly whatever hull is active in the hangar, with handling from its fitted stats. */
+  /**
+   * Fly whichever ship the fleet says, with handling from its fitted stats.
+   * Boarding a different ship gives you that ship fresh from the Hangar; a
+   * refit of the same one keeps your current health and fuel fractions.
+   */
   private applyHangar() {
-    const h = hangar.get();
-    this.hull = HULL[h.active];
-    const st = computeStats(h.active, h.fits[h.active]);
+    const me = flyingShip();
+    const hull = me?.hull ?? 'lancer', fit = me?.fit ?? starterFit('lancer'), id = me?.id ?? -1;
+    this.hull = HULL[hull];
+    const st = computeStats(hull, fit);
     this.flight = flightParams(st);
-    this.laser = weaponStats(h.active, h.fits[h.active], 'pulse-laser');
+    this.laser = weaponStats(hull, fit, 'pulse-laser');
     if (!this.laser.count) this.ceaseFire();
     this.flightDry = dryFlight(this.flight);
-    this.vitals = this.vitals ? refitVitals(this.vitals, st) : fullVitals(st);
+    this.vitals = this.vitals && id === this.flyingId ? refitVitals(this.vitals, st) : fullVitals(st);
+    this.flyingId = id;
     this.syncDamage();
   }
 
@@ -258,6 +268,16 @@ export class Engine {
     const r = this.vitals.hp / this.vitals.maxHp;
     this.stage = r > 0.75 ? 0 : r > 0.5 ? 1 : r > 0.25 ? 2 : 3;
     this.shipSprites = hullSprites(this.hull.id, this.view.meta!.player, this.stage);
+  }
+
+  /** After repairs: swap to the cleaner hull only when the damage stage actually drops. */
+  private syncStage(was: number) {
+    const r = this.vitals.hp / this.vitals.maxHp;
+    if ((r > 0.75 ? 0 : r > 0.5 ? 1 : r > 0.25 ? 2 : 3) === was) return;
+    this.syncDamage();
+    // A crater closes: one bigger shower of weld sparks.
+    const s = this.ship;
+    this.sparks(s.x, s.y - this.hull.alt, 14, s.vx, s.vy);
   }
 
   focusShip() {
@@ -301,7 +321,7 @@ export class Engine {
       el.setPointerCapture(e.pointerId);
       if (this.aim && e.button === 0) {
         this.trigger = true;
-        if (!this.laser.count) toast('Fit a Pulse Laser in the hangar (G)', 'bad');
+        if (!this.laser.count) toast('Fit a Pulse Laser at a Hangar', 'bad');
         return;
       }
       this.drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: false, button: e.button, lt: performance.now() };
@@ -350,14 +370,15 @@ export class Engine {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
       const k = e.key.toLowerCase();
       this.mouse.shift = e.shiftKey;
-      // The hangar is modal: only its own toggles get through.
-      if (this.hud.get().fittingOpen) {
-        if (k === 'g' || k === 'escape') this.hud.set({ fittingOpen: false });
+      // The ship panel and the Hangar are modal: only their own toggles get through.
+      const hud = this.hud.get();
+      if (hud.shipOpen || hud.hangarOpen !== null) {
+        if (k === 'escape' || (k === 'g' && hud.shipOpen)) this.hud.set({ shipOpen: false, hangarOpen: null });
         return;
       }
       if (k === 'g') {
         this.keys.clear();
-        this.hud.set({ fittingOpen: true });
+        this.hud.set({ shipOpen: true });
         return;
       }
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
@@ -383,8 +404,8 @@ export class Engine {
       else if (k === '=' || k === '+') this.zoomBy(1.5);
       else if (k === '-') this.zoomBy(1 / 1.5);
       else if (k === 'm') this.setZoom(this.cam.tz < 1 ? 3 : this.minZoom);
-      else if (k >= '1' && k <= '9') {
-        const def = BUILDABLE[Number(k) - 1];
+      else if (k >= '0' && k <= '9') {
+        const def = BUILDABLE[k === '0' ? 9 : Number(k) - 1];
         if (def) this.setBuildMode(this.buildMode === def.kind ? null : def.kind);
       }
     });
@@ -499,8 +520,19 @@ export class Engine {
     const n = Math.ceil(dt / (1 / 120));
     for (let i = 0; i < n; i++) stepFlight(s, input, dt / n, dry ? this.flightDry : this.flight);
 
-    this.depot = v.fuel < v.maxFuel ? this.nearestDepot() : null;
+    this.depot = v.fuel < v.maxFuel ? this.nearestOwn('depot', DEPOT_RANGE) : null;
     if (this.depot) v.fuel = Math.min(v.maxFuel, v.fuel + v.maxFuel * REFUEL_RATE * dt);
+    this.repair = v.hp < v.maxHp ? this.nearestOwn('repair', REPAIR_RANGE) : null;
+    if (this.repair) {
+      const was = this.stage;
+      v.hp = Math.min(v.maxHp, v.hp + v.maxHp * REPAIR_RATE * dt);
+      this.syncStage(was);
+      // The weld point wanders over the hull, spitting sparks.
+      if (this.cam.zoom >= 1 && Math.random() < dt * 12) {
+        const r = () => (Math.random() - 0.5) * 10;
+        this.sparks(s.x + r(), s.y - this.hull.alt + r() * 0.6, 2, s.vx, s.vy);
+      }
+    }
 
     // Soft wall at the sector's edge.
     const R = this.view.params.radiusPx * 0.97, d = Math.hypot(s.x, s.y);
@@ -563,16 +595,16 @@ export class Engine {
     }
   }
 
-  /** Closest finished friendly Fuel Depot within range of the ship's shadow, if any. */
-  private nearestDepot() {
+  /** Closest finished friendly structure of this kind within range of the ship's shadow, if any. */
+  private nearestOwn(kind: StructureKind, range: number) {
     const s = this.ship, at = pick(s.x, s.y);
     if (!at) return null;
-    const me = this.view.meta!.player, now = this.view.now(), n = Math.ceil(DEPOT_RANGE / RH) + 1;
-    let best: { x: number; y: number } | null = null, bd = DEPOT_RANGE;
+    const me = this.view.meta!.player, now = this.view.now(), n = Math.ceil(range / RH) + 1;
+    let best: { x: number; y: number } | null = null, bd = range;
     for (let r = at[1] - n; r <= at[1] + n; r++)
       for (let c = at[0] - n; c <= at[0] + n; c++) {
         const st = this.view.structure(c, r);
-        if (!st || st.kind !== 'depot' || st.owner !== me || progressOf(st, now) < 1) continue;
+        if (!st || st.kind !== kind || st.owner !== me || progressOf(st, now) < 1) continue;
         const x = tileX(c, r) + CX, y = tileY(r) + CY, d = Math.hypot(x - s.x, y - s.y);
         if (d < bd) {
           bd = d;
@@ -637,6 +669,7 @@ export class Engine {
     }
     this.blast(s.x, oy, s.y, 1.4, s.vx, s.vy);
     this.depot = null;
+    this.repair = null;
     this.ceaseFire();
     this.wreck = 3;
     this.shipTarget = null;
@@ -720,10 +753,9 @@ export class Engine {
     return null;
   }
 
-  /** Where the flagship is and what it's fitted with, for orders the shard validates. */
+  /** Where the flagship is, for orders the shard validates. It already knows which ship and fit. */
   shipReport(): ShipReport {
-    const h = hangar.get();
-    return { x: this.ship.x, y: this.ship.y, hull: h.active, fit: h.fits[h.active] };
+    return { x: this.ship.x, y: this.ship.y };
   }
 
   /** Crack open the selected cache with the flagship: the shard rolls the loot into the hold. */
@@ -1055,7 +1087,7 @@ export class Engine {
       zoom: this.cam.tz,
       selected: this.selected ? this.snap(this.selected[0], this.selected[1], false) : null,
       hover: this.hover ? this.snap(this.hover[0], this.hover[1], true) : null,
-      ship: { ...this.vitals, refuelling: !!this.depot, wrecked: this.wreck > 0, firing: this.target !== null },
+      ship: { ...this.vitals, refuelling: !!this.depot, repairing: !!this.repair, wrecked: this.wreck > 0, firing: this.target !== null },
     });
   }
 
@@ -1584,6 +1616,8 @@ export class Engine {
       e.globalAlpha = 1;
     }
 
+    if (this.repair) this.drawRepairBeam(gx, Math.round(s.y - alt), t);
+
     if (this.shipTarget) {
       const { x, y } = this.shipTarget, r = 6 + 2 * Math.sin(t * 6);
       e.globalAlpha = 0.85;
@@ -1597,6 +1631,25 @@ export class Engine {
       e.fillRect(Math.round(x), Math.round(y) - 2, 1, 5);
       e.globalAlpha = 1;
     }
+  }
+
+  /** Repair beam: a jittering green arc from the bay's arm to the hull, lit where it lands. */
+  private drawRepairBeam(x1: number, y1: number, t: number) {
+    const e = this.emit.ctx, l = this.light.ctx, { x, y } = this.repair!, x0 = x - 6, y0 = y - 22;
+    const len = Math.hypot(x1 - x0, y1 - y0), nx = -(y1 - y0) / len, ny = (x1 - x0) / len;
+    const seed = Math.floor(t * 20);
+    e.fillStyle = '#7dffb0';
+    for (let d = 0; d < len; d += 1) {
+      const u = d / len, wob = Math.sin(u * Math.PI) * (hash2(Math.floor(d / 4), seed, 5) - 0.5) * 4;
+      e.globalAlpha = 0.35 + 0.5 * Math.sin(u * Math.PI);
+      e.fillRect(Math.round(x0 + (x1 - x0) * u + nx * wob), Math.round(y0 + (y1 - y0) * u + ny * wob), 1, 1);
+    }
+    e.globalAlpha = 0.9;
+    e.fillStyle = '#ffffff';
+    e.fillRect(x1 - 1, y1 - 1, 2, 2);
+    l.globalAlpha = 0.25 + 0.15 * Math.sin(t * 30);
+    l.drawImage(assets.light('#7dffb0'), x1 - 20, y1 - 20, 40, 40);
+    e.globalAlpha = l.globalAlpha = 1;
   }
 
   /** On the strategic map the sprite is sub-pixel, so draw a heading arrow at constant size. */

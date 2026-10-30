@@ -3,11 +3,12 @@ import { Engine } from './game/engine';
 import { hud, setEngine, world } from './game/game';
 import { BuildDock } from './ui/BuildDock';
 import { DebugPanel } from './ui/DebugPanel';
-import { Fitting } from './ui/Fitting';
+import { HangarWindow } from './ui/HangarWindow';
 import { Feed } from './ui/Feed';
 import { Minimap } from './ui/Minimap';
 import { AimBanner, BuildBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
 import { SelectionPanel } from './ui/SelectionPanel';
+import { ShipPanel } from './ui/ShipPanel';
 import { ShipStatus } from './ui/ShipStatus';
 import { StorageWindow } from './ui/StorageWindow';
 import { installSkin } from './ui/skin';
@@ -61,7 +62,8 @@ export function App() {
           <DebugPanel />
           <Tooltip />
           <StorageWindow />
-          <Fitting />
+          <ShipPanel />
+          <HangarWindow />
         </div>
       )}
     </div>

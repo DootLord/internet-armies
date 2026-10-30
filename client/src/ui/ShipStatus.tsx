@@ -1,6 +1,5 @@
-import { cargo, hud } from '../game/game';
+import { cargo, fleet, hud } from '../game/game';
 import { usedCells } from '../game/ships/cargo';
-import { hangar } from '../game/ships/hangar';
 import { gridOf } from './CargoHold';
 import { useStore } from '../game/store';
 
@@ -22,11 +21,14 @@ function Gauge({ label, value, max, kind }: { label: string; value: number; max:
 /** The flagship's health and fuel, top-left under the resource bar. */
 export function ShipStatus() {
   const s = useStore(hud, (h) => h.ship);
-  const hg = useStore(hangar, (h) => h);
-  const items = useStore(cargo, (c) => c.holds[hg.active]) ?? [];
+  const flying = useStore(fleet, (f) => f.flying);
+  useStore(fleet, (f) => f.ships); // a refit can resize the hold
+  const items = useStore(cargo, (c) => c.holds[flying]) ?? [];
   if (!s.maxHp) return null;
-  const g = gridOf({ ship: hg.active, fit: hg.fits[hg.active] });
+  const g = gridOf({ ship: flying });
   const note = s.wrecked ? <span className="bad">Destroyed: respawning at home</span>
+    : s.repairing && s.refuelling ? <span className="ok">Repairing and refuelling</span>
+    : s.repairing ? <span className="ok">Repairing</span>
     : s.refuelling ? <span className="ok">Refuelling</span>
     : s.fuel <= 0 ? <span className="bad">Out of fuel: thrusters only</span>
     : null;

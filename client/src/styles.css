@@ -334,6 +334,21 @@ kbd {
 .shipstat-note .bad { color: var(--bad); }
 
 .fit-actions { min-height: 32px; display: flex; align-items: center; }
+.fit-head .warn { color: var(--warn); font-size: 17px; margin-right: auto; }
+.fit-head .tabs { margin-left: auto; }
+.fit-body.inv { grid-template-columns: 230px 1fr; }
+.slot.static { cursor: default; }
+.pbtn.wide:disabled { opacity: 0.45; cursor: not-allowed; }
+/* G: ship panel */
+.shippanel { width: min(900px, 96vw); }
+.ship-body { display: grid; grid-template-columns: 1fr auto; gap: calc(5 * var(--u)); min-height: 0; }
+.ship-cargo { display: flex; flex-direction: column; min-height: 0; min-width: 260px; }
+/* Hangar: base overview */
+.base-view { display: flex; flex-direction: column; gap: calc(4 * var(--u)); overflow-y: auto; }
+.base-view h3 { margin: 0 0 calc(2 * var(--u)); font-weight: 400; font-size: 20px; color: var(--hi); }
+.base-grid { display: flex; flex-wrap: wrap; gap: calc(2 * var(--u)); }
+.base-card { display: flex; align-items: center; gap: calc(2 * var(--u)); padding: calc(var(--u)) calc(3 * var(--u)) calc(var(--u)) var(--u); font-size: 17px; }
+.base-view .budget { grid-template-columns: 110px 1fr 92px; max-width: 520px; }
 .pbtn.wide { padding: calc(var(--u)) calc(6 * var(--u)); font-size: 20px; color: var(--acc); }
 
 .fit-modules { display: flex; flex-direction: column; gap: calc(2 * var(--u)); min-height: 0; }

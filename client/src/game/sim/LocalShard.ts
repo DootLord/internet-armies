@@ -16,7 +16,9 @@ import {
   addItem, CACHE_RANGE, CACHE_RESPAWN, cargoGrid, CargoItem, Grid, insertItem, ItemKind, moveItem, removeItem, rollLoot, STORAGE_GRID, STORAGE_RANGE,
 } from '../ships/cargo';
 import { computeStats, Fit, weaponStats } from '../ships/fitting';
-import { HULLS, HullId } from '../ships/hulls';
+import { DOCK_RANGE, FleetState, HANGAR_GRID, ShipRecord, validFit } from '../ships/fleet';
+import { starterFit } from '../ships/hangar';
+import { HULLS } from '../ships/hulls';
 
 export interface ShardOptions {
   seed: number;
@@ -39,8 +41,10 @@ export class LocalShard implements WorldSource, WorldRead {
   private byId = new Map<number, Structure>();
   /** What the player is shooting. A real shard keeps one entry per shooter. */
   private firing: Structure | null = null;
-  /** The player's ship holds (a real shard keys these by player) and every Storage's contents. */
-  private holds = Object.fromEntries(HULLS.map((h) => [h.id, []])) as unknown as Record<HullId, CargoItem[]>;
+  /** The player's fleet (a real shard keys these by player), each ship's hold, and every Storage and Hangar bay. */
+  private ships = new Map<number, ShipRecord>();
+  private flying = 0;
+  private holds = new Map<number, CargoItem[]>();
   private stores = new Map<number, CargoItem[]>();
   private nextItem = 1;
   /** Opened caches: packed tile -> server time it restocks. */
@@ -114,6 +118,7 @@ export class LocalShard implements WorldSource, WorldRead {
     this.h = h;
     this.sendPlayer();
     this.sendOverview();
+    this.sendFleet();
     this.sendCargo();
     for (const e of [...this.log].reverse()) if (this.visibleEvent(e)) this.send((x) => x.event(e));
     return this.reply({ seed: this.params.seed, radiusPx: this.params.radiusPx, homes: this.homes, player: PLAYER });
@@ -148,7 +153,8 @@ export class LocalShard implements WorldSource, WorldRead {
     let r: BuildCheck = { ok: true };
     if (!s || s.owner !== PLAYER) r = { ok: false, reason: 'Nothing to demolish' };
     else if (s.kind === 'nexus') r = { ok: false, reason: 'The Nexus cannot be demolished' };
-    else if (this.stores.get(s.id)?.length) r = { ok: false, reason: 'Empty the Storage first' };
+    else if (this.stores.get(s.id)?.length) r = { ok: false, reason: `Empty the ${STRUCT[s.kind].name} first` };
+    else if (s.kind === 'hangar' && [...this.ships.values()].some((sh) => sh.station === s.id)) r = { ok: false, reason: 'Move its ships out first' };
     else {
       const cost = STRUCT[s.kind].cost;
       for (const k of RES_KEYS) this.res[k] += Math.floor((cost[k] ?? 0) * 0.5);
@@ -164,16 +170,72 @@ export class LocalShard implements WorldSource, WorldRead {
     if (!order) return this.reply({ ok: true });
     const s = this.byId.get(order.target);
     if (!s) return this.reply({ ok: false, reason: 'Target lost' });
-    // Recompute damage from the fit with the shared rules: never trust a number from the client.
-    const st = computeStats(order.hull, order.fit);
-    if (st.cpuUsed > st.cpu + 1e-9 || st.powerUsed > st.power + 1e-9) return this.reply({ ok: false, reason: 'Invalid fit' });
-    const w = weaponStats(order.hull, order.fit, 'pulse-laser');
+    // Damage comes from the fit the shard holds for the ship you're flying, never from the client.
+    const me = this.flyingShip();
+    const w = weaponStats(me.hull, me.fit, 'pulse-laser');
     if (!w.count) return this.reply({ ok: false, reason: 'No Pulse Laser fitted' });
     if (Math.hypot(tileCenterX(s.col, s.row) - order.x, tileCenterY(s.row) - order.y) > w.range) return this.reply({ ok: false, reason: 'Out of range' });
     this.setDrain(s, w.dps);
     this.firing = s;
     this.flush();
     return this.reply({ ok: true });
+  }
+
+  // ---------------------------------------------------------------- fleet
+  private flyingShip() {
+    return this.ships.get(this.flying)!;
+  }
+
+  /** The completed, player-owned Hangar the ship is docked at, if any. */
+  private dockedAt(ship: ShipReport): Structure | null {
+    let best: Structure | null = null, bd = DOCK_RANGE;
+    for (const s of this.factionStructs[PLAYER]) {
+      if (s.kind !== 'hangar' || progressOf(s, this.now()) < 1) continue;
+      const d = Math.hypot(tileCenterX(s.col, s.row) - ship.x, tileCenterY(s.row) - ship.y);
+      if (d <= bd) {
+        bd = d;
+        best = s;
+      }
+    }
+    return best;
+  }
+
+  board(shipId: number, ship: ShipReport): Promise<BuildCheck> {
+    const r = ((): BuildCheck => {
+      const next = this.ships.get(shipId), h = this.dockedAt(ship);
+      if (!next) return { ok: false, reason: 'No such ship' };
+      if (shipId === this.flying) return { ok: false, reason: 'Already aboard' };
+      if (!h) return { ok: false, reason: 'Dock at a Hangar first' };
+      if (next.station !== h.id) return { ok: false, reason: 'That ship is stationed at another Hangar' };
+      this.flyingShip().station = h.id;
+      next.station = null;
+      this.flying = next.id;
+      this.ceaseFire();
+      return { ok: true };
+    })();
+    this.sendFleet();
+    return this.reply(r);
+  }
+
+  refit(shipId: number, fit: Fit, ship: ShipReport): Promise<BuildCheck> {
+    const r = ((): BuildCheck => {
+      const rec = this.ships.get(shipId), h = this.dockedAt(ship);
+      if (!rec) return { ok: false, reason: 'No such ship' };
+      if (!h) return { ok: false, reason: 'Dock at a Hangar to refit' };
+      if (rec.id !== this.flying && rec.station !== h.id) return { ok: false, reason: 'That ship is stationed at another Hangar' };
+      const v = validFit(rec.hull, fit);
+      if (!v.ok) return v;
+      rec.fit = structuredClone(fit);
+      return { ok: true };
+    })();
+    this.sendFleet();
+    this.sendCargo(); // a refit can resize the hold
+    return this.reply(r);
+  }
+
+  private sendFleet() {
+    const f: FleetState = { ships: structuredClone([...this.ships.values()]), flying: this.flying };
+    this.send((h) => h.fleet(f));
   }
 
   // ---------------------------------------------------------------- cargo
@@ -184,25 +246,28 @@ export class LocalShard implements WorldSource, WorldRead {
     return this.reply(r);
   }
 
-  /** Resolve a container to its items and grid, checking the player may reach it right now. */
+  /** Resolve a container to its items and grid, checking the player can reach it right now. */
   private container(c: Container, ship: ShipReport): { items: CargoItem[]; grid: Grid; set: (v: CargoItem[]) => void } | string {
     if ('ship' in c) {
-      const g = this.holdGrid(c.ship, c.fit);
-      if (typeof g === 'string') return g;
-      return { items: this.holds[c.ship], grid: g, set: (v) => (this.holds[c.ship] = v) };
+      const rec = this.ships.get(c.ship);
+      if (!rec) return 'No such ship';
+      // Your own ship is always in reach; a stationed one only while you're docked at its Hangar.
+      if (rec.id !== this.flying && this.dockedAt(ship)?.id !== rec.station) return 'Dock at its Hangar first';
+      return { items: this.holdOf(rec.id), grid: cargoGrid(computeStats(rec.hull, rec.fit).cargo), set: (v) => this.holds.set(rec.id, v) };
     }
-    const s = this.byId.get(c.storage);
-    if (!s || s.kind !== 'storage') return 'Storage not found';
-    if (s.owner !== PLAYER) return 'Not your Storage';
+    const s = this.byId.get(c.store);
+    if (!s || (s.kind !== 'storage' && s.kind !== 'hangar')) return 'Nothing to store items in';
+    if (s.owner !== PLAYER) return `Not your ${STRUCT[s.kind].name}`;
     if (progressOf(s, this.now()) < 1) return 'Still under construction';
-    if (Math.hypot(tileCenterX(s.col, s.row) - ship.x, tileCenterY(s.row) - ship.y) > STORAGE_RANGE) return 'Fly closer to the Storage';
-    return { items: this.storeOf(s.id), grid: STORAGE_GRID, set: (v) => this.stores.set(s.id, v) };
+    const range = s.kind === 'hangar' ? DOCK_RANGE : STORAGE_RANGE;
+    if (Math.hypot(tileCenterX(s.col, s.row) - ship.x, tileCenterY(s.row) - ship.y) > range) return `Fly closer to the ${STRUCT[s.kind].name}`;
+    return { items: this.storeOf(s.id), grid: s.kind === 'hangar' ? HANGAR_GRID : STORAGE_GRID, set: (v) => this.stores.set(s.id, v) };
   }
 
-  private holdGrid(hull: HullId, fit: Fit): Grid | string {
-    const st = computeStats(hull, fit);
-    if (st.cpuUsed > st.cpu + 1e-9 || st.powerUsed > st.power + 1e-9) return 'Invalid fit';
-    return cargoGrid(st.cargo);
+  private holdOf(id: number) {
+    let v = this.holds.get(id);
+    if (!v) this.holds.set(id, (v = []));
+    return v;
   }
 
   private storeOf(id: number) {
@@ -220,17 +285,13 @@ export class LocalShard implements WorldSource, WorldRead {
       from.set(removeItem(from.items, op.uid));
       return { ok: true };
     }
-    const same = JSON.stringify(op.from) === JSON.stringify(op.to);
-    if (same) {
+    if (JSON.stringify(op.from) === JSON.stringify(op.to)) {
       const next = moveItem(from.items, from.grid, op.uid, op.x, op.y, op.rot);
       if (!next) return { ok: false, reason: "Doesn't fit there" };
       from.set(next);
       return { ok: true };
     }
-    // Between holds: one side must be the ship you're flying, the other a Storage it can reach.
-    const shipSide = 'ship' in op.from ? op.from : 'ship' in op.to ? op.to : null;
-    if (!shipSide || ('ship' in op.from && 'ship' in op.to)) return { ok: false, reason: 'Items move between your ship and a Storage' };
-    if (shipSide.ship !== ship.hull) return { ok: false, reason: 'Only the ship you are flying can load cargo' };
+    // Between containers: both must be within reach right now.
     const to = this.container(op.to, ship);
     if (typeof to === 'string') return { ok: false, reason: to };
     const next = insertItem(to.items, to.grid, { ...it, x: op.x, y: op.y, rot: op.rot });
@@ -243,15 +304,14 @@ export class LocalShard implements WorldSource, WorldRead {
   openCache(col: number, row: number, ship: ShipReport): Promise<CacheResult> {
     if (this.kind(col, row) !== 'cache') return this.reply({ ok: false, reason: 'Nothing left to open' });
     if (Math.hypot(tileCenterX(col, row) - ship.x, tileCenterY(row) - ship.y) > CACHE_RANGE) return this.reply({ ok: false, reason: 'Fly closer to the cache' });
-    const g = this.holdGrid(ship.hull, ship.fit);
-    if (typeof g === 'string') return this.reply({ ok: false, reason: g });
+    const me = this.flyingShip(), g = cargoGrid(computeStats(me.hull, me.fit).cargo);
     // Loot is rolled here, never on the client, and lands straight in the hold.
     const loot: ItemKind[] = [];
     let lost = 0;
     for (const kind of rollLoot(this.rnd)) {
-      const next = addItem(this.holds[ship.hull], g, kind, this.nextItem);
+      const next = addItem(this.holdOf(me.id), g, kind, this.nextItem);
       if (next) {
-        this.holds[ship.hull] = next;
+        this.holds.set(me.id, next);
         this.nextItem++;
         loot.push(kind);
       } else lost++;
@@ -264,8 +324,9 @@ export class LocalShard implements WorldSource, WorldRead {
   }
 
   private sendCargo() {
-    const c: CargoState = { holds: structuredClone(this.holds), stores: {} };
-    for (const s of this.factionStructs[PLAYER]) if (s.kind === 'storage') c.stores[s.id] = structuredClone(this.storeOf(s.id));
+    const c: CargoState = { holds: {}, stores: {} };
+    for (const id of this.ships.keys()) c.holds[id] = structuredClone(this.holdOf(id));
+    for (const s of this.factionStructs[PLAYER]) if (s.kind === 'storage' || s.kind === 'hangar') c.stores[s.id] = structuredClone(this.storeOf(s.id));
     this.send((h) => h.cargo(c));
   }
 
@@ -284,10 +345,27 @@ export class LocalShard implements WorldSource, WorldRead {
     this.upsertStruct(s);
   }
 
+  /**
+   * Ships stationed at `from` (a lost Hangar's id, or -1 for ships already
+   * waiting) move to the player's nearest standing Hangar, or wait (-1) until
+   * one is built. Ships are never deleted with a building.
+   */
+  private rehome(from: number) {
+    const hangars = [...this.factionStructs[PLAYER]].filter((h) => h.kind === 'hangar' && h.id !== from && progressOf(h, this.now()) >= 1);
+    let moved = false;
+    for (const sh of this.ships.values())
+      if (sh.station === from) {
+        sh.station = hangars[0]?.id ?? -1;
+        moved = true;
+      }
+    if (moved) queueMicrotask(() => this.sendFleet());
+  }
+
   private destroy(s: Structure) {
     if (this.firing === s) this.firing = null;
     this.removeStruct(s);
     if (this.stores.delete(s.id)) this.sendCargo();
+    if (s.kind === 'hangar') this.rehome(s.id);
     (this.delta(s.col, s.row).destroyed ??= []).push(localIndex(s.col, s.row));
     this.emit({ faction: s.owner, type: 'info', col: s.col, row: s.row, text: `lost a ${STRUCT[s.kind].name} to weapons fire` });
     if (s.owner === PLAYER) this.sendPlayer();
@@ -479,7 +557,8 @@ export class LocalShard implements WorldSource, WorldRead {
 
   private complete(s: Structure, silent: boolean) {
     const def = STRUCT[s.kind];
-    if (s.kind === 'storage' && s.owner === PLAYER) queueMicrotask(() => this.sendCargo());
+    if ((s.kind === 'storage' || s.kind === 'hangar') && s.owner === PLAYER) queueMicrotask(() => this.sendCargo());
+    if (s.kind === 'hangar' && s.owner === PLAYER) this.rehome(-1);
     if (s.owner === PLAYER) this.rateCache = null;
     let claimed = 0;
     if (def.claim)
@@ -506,6 +585,14 @@ export class LocalShard implements WorldSource, WorldRead {
     if (!mine.some(([c, r]) => TILE_INFO[this.kind(c, r)].deposit)) this.setTerrain(...mine[mine.length - 1], KIND_ID.ore);
     const solar = this.randomOwned(PLAYER, false);
     if (solar) this.place('solar', solar[0], solar[1], PLAYER, true);
+    const hangarAt = this.randomOwned(PLAYER, false);
+    if (hangarAt) this.place('hangar', hangarAt[0], hangarAt[1], PLAYER, true);
+    const dock = hangarAt ? this.structure(...hangarAt)!.id : -1;
+    for (const h of HULLS) {
+      const id = this.nextItem++;
+      this.ships.set(id, { id, hull: h.id, fit: starterFit(h.id), station: h.id === 'lancer' ? null : dock });
+      if (h.id === 'lancer') this.flying = id;
+    }
     const home = this.homes[PLAYER];
     const ring = hexesInRadius(home.col, home.row, 7).filter(([c, r]) => this.kindId(c, r) !== VOID && !this.structure(c, r) && this.owner(c, r) === -1);
     for (let i = 0; i < 3 && ring.length; i++) this.setTerrain(...ring.splice(Math.floor(this.rnd() * ring.length), 1)[0], KIND_ID.cache);

@@ -7,6 +7,8 @@ import { emptyRes, StructureKind, TileKind } from './defs';
 import { Chunk, CHUNK_PX_H, CHUNK_PX_W, chunkKeyOf, localIndex, pack } from './chunks';
 import { fillChunk, KINDS, TerrainParams } from './terrain';
 import { canBuild, isAdjacentTo, WorldRead } from './rules';
+import type { Fit } from './ships/fitting';
+import type { FleetState } from './ships/fleet';
 import type { BuildCheck, CargoOp, CargoState, ChunkDelta, FireOrder, ShipReport, ChunkSnapshot, Overview, PlayerState, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
 
 /** Beyond this many chunks in view, stop per-chunk streaming and rely on the overview. */
@@ -34,6 +36,7 @@ export interface ViewListeners {
   /** A structure in a watched chunk was destroyed by fire (not demolished). */
   destroyed?: (s: Structure) => void;
   cargo?: (c: CargoState) => void;
+  fleet?: (f: FleetState) => void;
 }
 
 export class WorldView implements WorldRead {
@@ -46,6 +49,8 @@ export class WorldView implements WorldRead {
   overview: Overview | null = null;
   /** The player's holds and Storage contents, as the shard last reported them. */
   cargo: CargoState | null = null;
+  /** The player's ships, as the shard last reported them. */
+  fleet: FleetState | null = null;
   log: WorldEvent[] = [];
   listeners: ViewListeners = {};
   detail = true;
@@ -64,6 +69,10 @@ export class WorldView implements WorldRead {
       cargo: (c) => {
         this.cargo = c;
         this.listeners.cargo?.(c);
+      },
+      fleet: (f) => {
+        this.fleet = f;
+        this.listeners.fleet?.(f);
       },
       player: (p) => {
         this.player = p;
@@ -135,6 +144,14 @@ export class WorldView implements WorldRead {
 
   openCache(col: number, row: number, ship: ShipReport) {
     return this.source.openCache(col, row, ship);
+  }
+
+  board(shipId: number, ship: ShipReport) {
+    return this.source.board(shipId, ship);
+  }
+
+  refit(shipId: number, fit: Fit, ship: ShipReport) {
+    return this.source.refit(shipId, fit, ship);
   }
 
   // ---------------------------------------------------------------- streaming

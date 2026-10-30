@@ -9,11 +9,11 @@ const CONTROLS: [string, string][] = [
   ['Space', 'Pilot ship'],
   ['RMB', 'Fly to'],
   ['F', 'Find ship'],
-  ['G', 'Hangar'],
+  ['G', 'Ship'],
   ['E', 'Aim weapons'],
   ['Drag', 'Pan'],
   ['Wheel', 'Zoom'],
-  ['1–9', 'Build'],
+  ['1–0', 'Build'],
   ['M', 'Map'],
   ['H', 'Home'],
 ];
@@ -101,6 +101,11 @@ export function SelectionPanel() {
           {sel.kind === 'cache' && (
             <button className="pbtn wide" onClick={() => getEngine()?.openSelectedCache()}>
               Open cache
+            </button>
+          )}
+          {mine && s!.kind === 'hangar' && s!.progress >= 1 && (
+            <button className="pbtn wide" onClick={() => hud.set({ hangarOpen: s!.id })}>
+              Open hangar
             </button>
           )}
           {mine && s!.kind === 'storage' && s!.progress >= 1 && (

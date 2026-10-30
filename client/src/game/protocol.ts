@@ -4,7 +4,7 @@
 import type { Res, StructureKind } from './defs';
 import type { CargoItem, ItemKind } from './ships/cargo';
 import type { Fit } from './ships/fitting';
-import type { HullId } from './ships/hulls';
+import type { FleetState } from './ships/fleet';
 
 export interface BuildCheck {
   ok: boolean;
@@ -66,37 +66,36 @@ export interface ChunkDelta {
 }
 
 /**
- * What the shooter tells the shard when it opens fire. Interim: once flagships
- * live on the server, position and fit come from server state and this shrinks
- * to the target id. The shard already recomputes damage and range from the fit
- * with the shared fitting rules, so the client can't just claim a number.
+ * Where the flagship is. The shard already knows which ship you fly and its
+ * fit (it owns the fleet); position is the one thing it still takes on trust
+ * until flight runs server-side too.
  */
 export interface ShipReport {
   x: number;
   y: number;
-  hull: HullId;
-  fit: Fit;
 }
 
 export interface FireOrder extends ShipReport {
   target: number;
 }
 
-/** Somewhere items live: one of the player's ship holds, or a Storage building. */
-export type Container = { ship: HullId; fit: Fit } | { storage: number };
+/** Somewhere items live: a ship's hold (by ship id), or a Storage Bay / Hangar item bay (by structure id). */
+export type Container = { ship: number } | { store: number };
 
 /**
- * A cargo intent. The shard checks it with cargo.ts (fit, overlap, range to a
- * Storage) and answers with fresh CargoState either way, so a client that
- * applied it optimistically always ends up matching the shard.
+ * A cargo intent. The shard checks it with cargo.ts (fit, overlap, reach) and
+ * answers with fresh CargoState either way, so a client that applied it
+ * optimistically always ends up matching the shard. Items move between any
+ * two containers you can reach at once: your flown ship, ships stationed in
+ * the Hangar you're docked at, its item bay, and Storage Bays in range.
  */
 export type CargoOp =
   | { op: 'move'; from: Container; uid: number; to: Container; x: number; y: number; rot: boolean }
   | { op: 'jettison'; from: Container; uid: number };
 
-/** Everything the player owns in cargo: each hull's hold and each of their Storage buildings. */
+/** Everything the player owns in cargo: each ship's hold and each of their Storage Bays and Hangar bays. */
 export interface CargoState {
-  holds: Record<HullId, CargoItem[]>;
+  holds: Record<number, CargoItem[]>;
   stores: Record<number, CargoItem[]>;
 }
 
@@ -151,6 +150,7 @@ export interface SourceHandlers {
   overview(o: Overview): void;
   event(e: WorldEvent): void;
   cargo(c: CargoState): void;
+  fleet(f: FleetState): void;
 }
 
 export interface WorldSource {
@@ -165,6 +165,10 @@ export interface WorldSource {
   cargo(op: CargoOp, ship: ShipReport): Promise<BuildCheck>;
   /** Crack open the cache tile at col,row into the ship's hold. */
   openCache(col: number, row: number, ship: ShipReport): Promise<CacheResult>;
+  /** Swap into a ship stationed at the Hangar you're docked at; the one you flew stays there. */
+  board(shipId: number, ship: ShipReport): Promise<BuildCheck>;
+  /** Replace a ship's whole fit. Needs it docked: flown and in range of a Hangar, or stationed at the one you're docked at. */
+  refit(shipId: number, fit: Fit, ship: ShipReport): Promise<BuildCheck>;
   /** Server clock in seconds. */
   now(): number;
 }

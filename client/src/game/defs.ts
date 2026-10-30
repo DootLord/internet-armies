@@ -27,7 +27,7 @@ export const TILE_INFO: Record<TileKind, { name: string; desc: string; deposit?:
   cacheOpen: { name: 'Spent Cache', desc: 'Already looted. Salvage crews restock it in time.' },
 };
 
-export type StructureKind = 'nexus' | 'extractor' | 'solar' | 'habitat' | 'turret' | 'shield' | 'relay' | 'dronebay' | 'depot' | 'storage';
+export type StructureKind = 'nexus' | 'extractor' | 'solar' | 'habitat' | 'turret' | 'shield' | 'relay' | 'dronebay' | 'depot' | 'repair' | 'storage' | 'hangar';
 
 export interface StructureDef {
   kind: StructureKind;
@@ -55,7 +55,9 @@ export const STRUCTURES: StructureDef[] = [
   { kind: 'relay', name: 'Claim Relay', role: 'Expansion', desc: 'Built on the frontier. Extends your territory.', cost: { credits: 300, alloy: 150 }, buildTime: 25, place: 'frontier', produce: () => ({ energy: -1 }), claim: 2, light: 44, hp: 1600 },
   { kind: 'dronebay', name: 'Drone Bay', role: 'Logistics', desc: 'Launches haulers between your structures.', cost: { credits: 220, alloy: 140 }, buildTime: 18, place: 'owned', produce: () => ({ credits: 2, energy: -2 }), light: 46, hp: 1300 },
   { kind: 'depot', name: 'Fuel Depot', role: 'Logistics', desc: 'Refuels your ships while they hover nearby.', cost: { credits: 140, alloy: 60 }, buildTime: 12, place: 'owned', produce: () => ({ energy: -1 }), light: 42, hp: 800 },
+  { kind: 'repair', name: 'Repair Bay', role: 'Logistics', desc: 'Welding drones patch up your ships while they hover nearby.', cost: { credits: 160, alloy: 90 }, buildTime: 14, place: 'owned', produce: () => ({ energy: -2 }), light: 44, hp: 1000 },
   { kind: 'storage', name: 'Storage Bay', role: 'Logistics', desc: 'A huge, immovable hold. Ships nearby can load and unload cargo.', cost: { credits: 180, alloy: 120 }, buildTime: 15, place: 'owned', produce: () => ({ energy: -1 }), light: 40, hp: 2000 },
+  { kind: 'hangar', name: 'Hangar', role: 'Logistics', desc: 'Stations your ships for swapping and refitting, with a large item bay. Dock nearby to use it.', cost: { credits: 260, alloy: 160 }, buildTime: 20, place: 'owned', produce: () => ({ energy: -2 }), light: 52, hp: 3000 },
 ];
 export const STRUCT = Object.fromEntries(STRUCTURES.map((s) => [s.kind, s])) as Record<StructureKind, StructureDef>;
 export const BUILDABLE = STRUCTURES.filter((s) => s.place !== 'none');
