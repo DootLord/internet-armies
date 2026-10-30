@@ -1,12 +1,12 @@
 // 2.5D ships: a small voxel model is ray-cast into pixel-art sprites at many
 // headings and bank angles, using the same camera, light and material ramps as
 // the hex world, so a ship reads as hand-drawn yet rotates consistently.
-import { accentRamp, C_AMBER, C_WHITE, CRY, mix, OUTLINE, RGB, STEEL } from '../palette';
+import { accentRamp, C_AMBER, C_WHITE, CRY, mix, OUTLINE, RGB, ROCK, STEEL } from '../palette';
 import { bayer, hash2, mulberry32 } from '../rng';
 import { Pix } from '../sprites';
 
-/** Scorch is never authored by shapes; damageModel() burns it into a hull. */
-export const enum Mat { Empty, Hull, Dark, Accent, Glass, Engine, Light, Scorch }
+/** Scorch is never authored by shapes; damageModel() burns it into a hull. Rock is for cargo items like ore. */
+export const enum Mat { Empty, Hull, Dark, Accent, Glass, Engine, Light, Scorch, Rock }
 
 export interface VoxelModel {
   sx: number;
@@ -203,6 +203,7 @@ export function renderFrame(m: VoxelModel, yaw: number, roll: number, acc: RGB[]
           c.set(px, py, C_WHITE);
           e.set(px, py, C_WHITE, 255);
           break;
+        case Mat.Rock: c.set(px, py, pick(ROCK, v, px, py)); break;
         case Mat.Scorch:
           // Charred plating with the odd ember still glowing in it.
           if (hash2(px, py, 7) < 0.1) {

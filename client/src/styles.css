@@ -365,7 +365,7 @@ kbd {
 .cargo-item { position: absolute; cursor: grab; touch-action: none; background: rgba(184, 200, 220, 0.05); box-shadow: inset 0 0 0 1px rgba(184, 200, 220, 0.22); }
 .cargo-item:hover { background: rgba(73, 224, 255, 0.08); box-shadow: inset 0 0 0 1px var(--acc); }
 .cargo-item.lifted { opacity: 0.25; }
-.cargo-item img { position: absolute; left: 50%; top: 50%; image-rendering: pixelated; pointer-events: none; transform: translate(-50%, -50%) rotate(var(--r, 0deg)); filter: drop-shadow(0 0 3px rgba(255, 162, 69, 0.45)); }
+.cargo-item img { position: absolute; left: 50%; top: 50%; image-rendering: pixelated; pointer-events: none; transform: translate(-50%, -50%); filter: drop-shadow(0 calc(var(--u) * 1.5) 0 rgba(0, 0, 0, 0.45)); }
 .cargo-ghost { position: absolute; pointer-events: none; background: rgba(92, 255, 157, 0.14); box-shadow: inset 0 0 0 1px var(--good); }
 .cargo-ghost.bad { background: rgba(255, 90, 112, 0.14); box-shadow: inset 0 0 0 1px var(--bad); }
 .cargo-float { position: fixed; z-index: 100; pointer-events: none; }

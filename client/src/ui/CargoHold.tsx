@@ -5,7 +5,7 @@ import type { CargoOp, CargoState, Container } from '../game/protocol';
 import { canPlace, cargoGrid, CargoItem, footprint, Grid, inGrid, insertItem, ItemKind, ITEMS, moveItem, removeItem, STORAGE_GRID, usedCells } from '../game/ships/cargo';
 import { computeStats, Fit } from '../game/ships/fitting';
 import type { HullId } from '../game/ships/hulls';
-import { itemArt } from '../game/sprites';
+import { itemPose, itemSpan } from '../game/itemArt';
 import { useStore } from '../game/store';
 
 /** One grid on screen: a ship hold or a Storage. `locked` explains why it can't be touched right now. */
@@ -65,10 +65,30 @@ export function HangarHold({ hull, fit }: { hull: HullId; fit: Fit }) {
   );
 }
 
-function ItemArt({ it }: { it: Pick<CargoItem, 'kind' | 'rot'> }) {
-  const d = ITEMS[it.kind];
-  // Art is painted unrotated and turned in CSS, centred in the rotated footprint.
-  return <img src={itemArt(it.kind)} alt="" draggable={false} style={{ width: cells(d.w), height: cells(d.h), '--r': it.rot ? '90deg' : '0deg' } as CSSProperties} />;
+/** A rendered voxel item, centred on its footprint. `live` sways it gently, for hover and while carried. */
+function ItemArt({ it, live }: { it: Pick<CargoItem, 'kind' | 'rot'>; live?: boolean }) {
+  const ref = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const img = ref.current!;
+    const rest = itemPose(it.kind, it.rot, 0);
+    if (!live) {
+      img.src = rest;
+      return;
+    }
+    let raf = 0, last = rest;
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      // Start at rest and ease into a slow sway, swapping frames only when the pose changes.
+      const ramp = Math.min(1, (now - t0) / 300);
+      const src = itemPose(it.kind, it.rot, ramp * Math.sin(((now - t0) / 1000) * 2.4));
+      if (src !== last) img.src = last = src;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [it.kind, it.rot, live]);
+  const n = itemSpan(it.kind);
+  return <img ref={ref} src={itemPose(it.kind, it.rot, 0)} alt="" draggable={false} style={{ width: cells(n), height: cells(n) }} />;
 }
 
 /** One or more cargo grids side by side: drag to pack, drag across to transfer, R rotates, drop on the bin to jettison. */
@@ -80,6 +100,7 @@ export function CargoBays({ bays, hint }: { bays: Bay[]; hint?: string }) {
   baysRef.current = bays;
   const [drag, setDragState] = useState<Drag | null>(null);
   const [info, setInfo] = useState<ItemKind | null>(null);
+  const [hot, setHot] = useState<number | null>(null);
   const setDrag = (d: Drag | null) => setDragState((dragRef.current = d));
 
   const cellPx = (key: string) => {
@@ -154,10 +175,16 @@ export function CargoBays({ bays, hint }: { bays: Bay[]; hint?: string }) {
         className={`cargo-item ${drag?.uid === it.uid ? 'lifted' : ''}`}
         style={{ width: cells(w), height: cells(h), ...style }}
         onPointerDown={(e) => lift(bay, it, e)}
-        onPointerEnter={() => setInfo(it.kind)}
-        onPointerLeave={() => setInfo(null)}
+        onPointerEnter={() => {
+          setInfo(it.kind);
+          setHot(it.uid);
+        }}
+        onPointerLeave={() => {
+          setInfo(null);
+          setHot(null);
+        }}
       >
-        <ItemArt it={it} />
+        <ItemArt it={it} live={hot === it.uid && !drag} />
       </div>
     );
   };
@@ -217,7 +244,7 @@ export function CargoBays({ bays, hint }: { bays: Bay[]; hint?: string }) {
         createPortal(
           <div className="cargo-float" style={{ left: drag.px - (drag.gx + 0.5) * cellPx(drag.bay), top: drag.py - (drag.gy + 0.5) * cellPx(drag.bay), ['--cell' as string]: `${cellPx(drag.bay)}px` }}>
             <div className="cargo-item" style={{ width: cells(landFoot[0]), height: cells(landFoot[1]) }}>
-              <ItemArt it={{ kind: carried.kind, rot: drag.rot }} />
+              <ItemArt it={{ kind: carried.kind, rot: drag.rot }} live />
             </div>
           </div>,
           document.body,

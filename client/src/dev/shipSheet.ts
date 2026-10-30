@@ -2,6 +2,8 @@
 // Open http://localhost:5173/ships.html while `npm run dev` is running.
 import { HULLS, hullSprites } from '../game/ships/hulls';
 import { YAW_STEPS } from '../game/ships/voxel';
+import { ItemKind, ITEMS } from '../game/ships/cargo';
+import { itemPose, itemSpan } from '../game/itemArt';
 
 const cols = YAW_STEPS / 4, scale = 3;
 for (const h of HULLS) {
@@ -24,4 +26,27 @@ for (const h of HULLS) {
       g.globalCompositeOperation = 'source-over';
     }
   document.body.append(label, cv);
+}
+
+// Cargo items: resting pose, the sway range, and rotated.
+const items = document.createElement('div');
+items.textContent = 'Cargo items · rest · sway -1 / +1 · rotated';
+items.style.marginTop = '24px';
+document.body.append(items);
+for (const kind of Object.keys(ITEMS) as ItemKind[]) {
+  const row = document.createElement('div');
+  row.style.display = 'flex';
+  row.style.gap = '12px';
+  row.style.alignItems = 'center';
+  for (const [rot, a] of [[false, 0], [false, -1], [false, 1], [true, 0]] as [boolean, number][]) {
+    const img = document.createElement('img');
+    img.src = itemPose(kind, rot, a);
+    img.style.width = `${itemSpan(kind) * 16 * scale}px`;
+    img.style.imageRendering = 'pixelated';
+    row.append(img);
+  }
+  const name = document.createElement('span');
+  name.textContent = ITEMS[kind].name;
+  row.append(name);
+  document.body.append(row);
 }
