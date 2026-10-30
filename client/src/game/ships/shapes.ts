@@ -1,7 +1,7 @@
 // Hull shapes as material functions over model space: x forward (nose +),
 // y right, z up; one unit = one art pixel before scaling. Each is ray-cast
 // into sprites by voxel.ts, so a new hull is just a new function here.
-import { buildModel, Mat, VoxelModel } from './voxel';
+import { buildModel, damageModel, Mat, pickHits, VoxelModel } from './voxel';
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 type Shape = (x: number, y: number, z: number) => Mat;
@@ -135,19 +135,34 @@ export const SHAPES = {
 } satisfies Record<string, ShapeSpec>;
 export type ShapeId = keyof typeof SHAPES;
 
-const cache = new Map<ShapeId, VoxelModel>();
+const cache = new Map<string, VoxelModel>();
 /** Sampling the shape at finer resolution makes a hull bigger *and* more detailed. */
-export function shipModel(id: ShapeId) {
-  let m = cache.get(id);
+export function shipModel(id: ShapeId, stage = 0) {
+  const key = `${id}:${stage}`;
+  let m = cache.get(key);
   if (!m) {
-    const { shape, size, engines, scale: s } = SHAPES[id] as ShapeSpec;
-    m = buildModel(
-      Math.ceil(size[0] * s), Math.ceil(size[1] * s), Math.ceil(size[2] * s),
-      (x, y, z) => shape(x / s, y / s, z / s),
-      engines.map(([x, y, z]) => [x * s, y * s, z * s] as Vec),
-    );
-    cache.set(id, m);
+    if (stage) {
+      const base = shipModel(id);
+      m = damageModel(base, shipHits(id, stage), 1.2 + base.sz * 0.08);
+    } else {
+      const { shape, size, engines, scale: s } = SHAPES[id] as ShapeSpec;
+      m = buildModel(
+        Math.ceil(size[0] * s), Math.ceil(size[1] * s), Math.ceil(size[2] * s),
+        (x, y, z) => shape(x / s, y / s, z / s),
+        engines.map(([x, y, z]) => [x * s, y * s, z * s] as Vec),
+      );
+    }
+    cache.set(key, m);
   }
   return m;
 }
 
+/** Damage stages 0 (pristine) to 3 (critical), and how many craters each shows. */
+export const DAMAGE_HITS = [0, 1, 2, 4];
+const hits = new Map<ShapeId, Vec[]>();
+/** The crater centres open at a damage stage; the same each time, so wounds only ever add up. */
+export function shipHits(id: ShapeId, stage: number): Vec[] {
+  let h = hits.get(id);
+  if (!h) hits.set(id, (h = pickHits(shipModel(id), DAMAGE_HITS[3], id.length * 7919 + id.charCodeAt(0))));
+  return h.slice(0, DAMAGE_HITS[stage]);
+}

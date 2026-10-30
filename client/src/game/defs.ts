@@ -25,7 +25,7 @@ export const TILE_INFO: Record<TileKind, { name: string; desc: string; deposit?:
   ruin: { name: 'Derelict Wreck', desc: 'Salvage from a forgotten war.' },
 };
 
-export type StructureKind = 'nexus' | 'extractor' | 'solar' | 'habitat' | 'turret' | 'shield' | 'relay' | 'dronebay';
+export type StructureKind = 'nexus' | 'extractor' | 'solar' | 'habitat' | 'turret' | 'shield' | 'relay' | 'dronebay' | 'depot';
 
 export interface StructureDef {
   kind: StructureKind;
@@ -50,6 +50,7 @@ export const STRUCTURES: StructureDef[] = [
   { kind: 'shield', name: 'Aegis Pylon', role: 'Defense', desc: 'Projects a protective barrier dome.', cost: { credits: 260, alloy: 100, crystal: 30 }, buildTime: 22, place: 'owned', produce: () => ({ energy: -3 }), light: 54 },
   { kind: 'relay', name: 'Claim Relay', role: 'Expansion', desc: 'Built on the frontier. Extends your territory.', cost: { credits: 300, alloy: 150 }, buildTime: 25, place: 'frontier', produce: () => ({ energy: -1 }), claim: 2, light: 44 },
   { kind: 'dronebay', name: 'Drone Bay', role: 'Logistics', desc: 'Launches haulers between your structures.', cost: { credits: 220, alloy: 140 }, buildTime: 18, place: 'owned', produce: () => ({ credits: 2, energy: -2 }), light: 46 },
+  { kind: 'depot', name: 'Fuel Depot', role: 'Logistics', desc: 'Refuels your ships while they hover nearby.', cost: { credits: 140, alloy: 60 }, buildTime: 12, place: 'owned', produce: () => ({ energy: -1 }), light: 42 },
 ];
 export const STRUCT = Object.fromEntries(STRUCTURES.map((s) => [s.kind, s])) as Record<StructureKind, StructureDef>;
 export const BUILDABLE = STRUCTURES.filter((s) => s.place !== 'none');

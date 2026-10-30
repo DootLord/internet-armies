@@ -21,6 +21,7 @@ const STAT_ROWS: { key: keyof ShipStats; label: string; fmt: (v: number) => stri
   { key: 'range', label: 'Range', fmt: (v) => v.toFixed(0) },
   { key: 'mining', label: 'Mining', fmt: (v) => `${v.toFixed(0)}/s` },
   { key: 'cargo', label: 'Cargo', fmt: (v) => v.toFixed(0) },
+  { key: 'fuel', label: 'Fuel', fmt: (v) => v.toFixed(0) },
 ];
 
 function Budget({ label, used, total }: { label: string; used: number; total: number }) {

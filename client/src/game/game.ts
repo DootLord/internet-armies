@@ -1,6 +1,7 @@
 import { emptyRes, Res, StructureKind, TileKind } from './defs';
 import type { Engine } from './engine';
 import type { WorldEvent } from './protocol';
+import type { Vitals } from './ships/vitals';
 import { LocalShard } from './sim/LocalShard';
 import { createStore } from './store';
 import { WorldView } from './WorldView';
@@ -37,6 +38,7 @@ export interface HudState {
   zoom: number;
   pilot: boolean;
   fittingOpen: boolean;
+  ship: Vitals & { refuelling: boolean; wrecked: boolean };
 }
 
 // ?radius=40000 (world px) for stress tests; the default disc is ~0.9M hex slots.
@@ -57,6 +59,7 @@ export const hud = createStore<HudState>({
   zoom: 3,
   pilot: false,
   fittingOpen: false,
+  ship: { hp: 0, maxHp: 0, fuel: 0, maxFuel: 0, refuelling: false, wrecked: false },
 });
 
 world.listeners = {

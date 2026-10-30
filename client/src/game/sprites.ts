@@ -466,6 +466,24 @@ const PAINT: Record<StructureKind, (p: Painter) => void> = {
     p.beacons.push([9, 28]);
     p.glow(9, 28, a[4]);
   },
+  depot(p) {
+    const a = p.acc;
+    p.prism(20, 41, 14, 3, S, -0.04);
+    // Two domed tanks with amber level gauges; the nearer one sits lower.
+    p.cyl(12, 30, 5, 10, S, 0.02);
+    p.dome(12, 30, 5, 4, S, 0.06);
+    for (let y = 34; y < 40; y++) p.glow(9, y, C_AMBER, 200);
+    p.cyl(25, 32, 6, 9, S);
+    p.dome(25, 32, 6, 5, S, 0.04);
+    for (let y = 36; y < 41; y++) p.glow(21, y, C_AMBER, 200);
+    // Refuelling boom: mast, arm and a glowing nozzle.
+    p.line(33, 40, 33, 14, S[6]); p.line(34, 40, 34, 14, S[3]);
+    p.line(33, 14, 24, 10, S[6]); p.line(24, 10, 24, 16, S[4]);
+    p.glow(24, 17, a[4]);
+    for (let x = 8; x < 33; x += 3) p.glow(x, p.prismFront(20, 41, 14, x) + 2, a[2], 180);
+    p.glow(33, 13, a[4]);
+    p.beacons.push([33, 13]);
+  },
 };
 
 // ============================================================== shared overlays

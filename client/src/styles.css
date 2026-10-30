@@ -320,6 +320,15 @@ kbd {
 .budget-bar { --bw: calc(2 * var(--u)); --sl: 2; --fi: var(--f-well); height: calc(8 * var(--u)); padding: 0; position: relative; }
 .budget-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(180deg, #6df2ff, #1f8fa8); box-shadow: 0 0 8px rgba(73, 224, 255, 0.6); transition: width 0.15s steps(4); }
 .budget-fill.hot { background: linear-gradient(180deg, #ffd36b, #c7802a); box-shadow: 0 0 8px rgba(255, 195, 92, 0.6); }
+.budget-fill.hp { background: linear-gradient(180deg, #8dffbc, #2a9c5c); box-shadow: 0 0 8px rgba(92, 255, 157, 0.5); }
+.budget-fill.fuel { background: linear-gradient(180deg, #ffc47a, #c0661f); box-shadow: 0 0 8px rgba(255, 166, 74, 0.5); }
+.budget-fill.low { background: linear-gradient(180deg, #ff8a9a, #b02a3e); box-shadow: 0 0 8px rgba(255, 90, 112, 0.6); }
+
+/* ------------------------------------------------------------ flagship status */
+.shipstat { position: absolute; top: calc(23 * var(--u)); left: calc(6 * var(--u)); width: 300px; padding: calc(var(--u)) calc(3 * var(--u)); display: flex; flex-direction: column; gap: calc(var(--u)); pointer-events: none; }
+.shipstat-note { font-size: 17px; }
+.shipstat-note .ok { color: var(--good); }
+.shipstat-note .bad { color: var(--bad); }
 
 .fit-actions { min-height: 32px; display: flex; align-items: center; }
 .pbtn.wide { padding: calc(var(--u)) calc(6 * var(--u)); font-size: 20px; color: var(--acc); }

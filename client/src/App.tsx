@@ -8,6 +8,7 @@ import { Feed } from './ui/Feed';
 import { Minimap } from './ui/Minimap';
 import { BuildBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
 import { SelectionPanel } from './ui/SelectionPanel';
+import { ShipStatus } from './ui/ShipStatus';
 import { installSkin } from './ui/skin';
 import { TopBar } from './ui/TopBar';
 
@@ -47,6 +48,7 @@ export function App() {
       {ready && (
         <div className="hud">
           <TopBar />
+          <ShipStatus />
           <Feed />
           <BuildBanner />
           <PilotBanner />

@@ -13,8 +13,11 @@ import type { WorldView } from './WorldView';
 import { computeStats, flightParams } from './ships/fitting';
 import { hangar } from './ships/hangar';
 import { HULL, HullDef, hullSprites } from './ships/hulls';
+import { shipHits } from './ships/shapes';
 import { autopilot, FlightInput, FlightParams, FlightState, newFlight, stepFlight } from './ships/flight';
-import { BANK_ANGLE, BANK_LEVELS, PITCH_SIN, projectPoint, ShipSprites } from './ships/voxel';
+import { BANK_ANGLE, BANK_LEVELS, PITCH_SIN, projectPoint, shatter, ShipSprites, splitModel } from './ships/voxel';
+import { accentRamp, css } from './palette';
+import { DEPOT_RANGE, dryFlight, fuelBurn, fullVitals, REFUEL_RATE, refitVitals, Vitals } from './ships/vitals';
 
 interface Layer { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D }
 const layer = (): Layer => {
@@ -23,7 +26,20 @@ const layer = (): Layer => {
 };
 
 interface Ship { f: number; x0: number; y0: number; x1: number; y1: number; t: number; dur: number; arc: number; trail: number[] }
-interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; col: string; a?: number }
+/** `solid` particles are lit debris on the colour layer; the rest glow on the emissive layer. */
+/** A flash of light; `ring` adds a shockwave on the ground plane. */
+interface Boom { x: number; y: number; t: number; size: number; ring?: boolean }
+/** A tumbling chunk of a destroyed hull. x/y is its ground point, z its height above it. */
+interface Wreck {
+  spr: ShipSprites;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  yaw: number; roll: number; spin: number; tumble: number;
+  life: number; max: number; landed: boolean;
+  /** Seconds until a secondary explosion, or <= 0 for none. */
+  pop: number;
+}
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; col: string; a?: number; solid?: boolean; drag?: number; size?: number }
 
 const MAX_ZOOM = 7;
 /** At or above this zoom, art pixels map 1:1 to buffer texels (crisp pixel art). */
@@ -79,7 +95,18 @@ export class Engine {
   private shipSprites!: ShipSprites;
   private hull!: HullDef;
   private flight!: FlightParams;
+  private flightDry!: FlightParams;
+  private vitals!: Vitals;
+  /** The Fuel Depot currently topping up the tank, for drawing the fuel line. */
+  private depot: { x: number; y: number } | null = null;
   private shipTarget: { x: number; y: number } | null = null;
+  /** Seconds until the flagship reappears after exploding, and the fireball's light. */
+  private wreck = 0;
+  private booms: Boom[] = [];
+  private wrecks: Wreck[] = [];
+  private shake = 0;
+  /** 0 = pristine .. 3 = critical; picks the cratered hull sprites and how much it smokes. */
+  private stage = 0;
   pilot = false;
   private look = { x: 0, y: 0 };
   private demo: { x: number; y: number }[] | null = null;
@@ -190,8 +217,18 @@ export class Engine {
   private applyHangar() {
     const h = hangar.get();
     this.hull = HULL[h.active];
-    this.shipSprites = hullSprites(h.active, this.view.meta!.player);
-    this.flight = flightParams(computeStats(h.active, h.fits[h.active]));
+    const st = computeStats(h.active, h.fits[h.active]);
+    this.flight = flightParams(st);
+    this.flightDry = dryFlight(this.flight);
+    this.vitals = this.vitals ? refitVitals(this.vitals, st) : fullVitals(st);
+    this.syncDamage();
+  }
+
+  /** Show the cratered hull for the current health; call whenever hp or the hull changes. */
+  private syncDamage() {
+    const r = this.vitals.hp / this.vitals.maxHp;
+    this.stage = r > 0.75 ? 0 : r > 0.5 ? 1 : r > 0.25 ? 2 : 3;
+    this.shipSprites = hullSprites(this.hull.id, this.view.meta!.player, this.stage);
   }
 
   focusShip() {
@@ -296,6 +333,7 @@ export class Engine {
         e.preventDefault();
         if (!e.repeat) this.setPilot(!this.pilot);
       } else if (k === 'f') this.focusShip();
+      else if (k === 'x' && import.meta.env.DEV && !e.repeat) this.damageShip(this.vitals.maxHp * 0.25); // dev: test damage and death
       else if (k === 'escape') {
         if (this.buildMode) this.setBuildMode(null);
         else if (this.pilot) this.setPilot(false);
@@ -382,11 +420,17 @@ export class Engine {
     this.worldMap.update(2);
     this.updateHover();
     this.updateShips(dt);
+    this.updateWrecks(dt);
     this.render(now / 1000, dt);
     this.syncHud(dt);
   };
 
   private updateShip(dt: number) {
+    if (this.wreck > 0) {
+      this.wreck = Math.max(0, this.wreck - dt);
+      if (!this.wreck) this.respawn();
+      return;
+    }
     const s = this.ship, k = this.keys;
     let input: FlightInput = { throttle: 0, steer: 0, boost: false };
     if (this.pilot) {
@@ -403,9 +447,16 @@ export class Engine {
       if (ap) input = ap;
       else this.shipTarget = null;
     }
+    // An empty tank doesn't strand the ship, it just crawls without boost.
+    const v = this.vitals, dry = v.fuel <= 0;
+    if (dry) input.boost = false;
+    v.fuel = Math.max(0, v.fuel - fuelBurn(input, dt));
     // Fixed sub-steps keep the flight model frame-rate independent.
     const n = Math.ceil(dt / (1 / 120));
-    for (let i = 0; i < n; i++) stepFlight(s, input, dt / n, this.flight);
+    for (let i = 0; i < n; i++) stepFlight(s, input, dt / n, dry ? this.flightDry : this.flight);
+
+    this.depot = v.fuel < v.maxFuel ? this.nearestDepot() : null;
+    if (this.depot) v.fuel = Math.min(v.maxFuel, v.fuel + v.maxFuel * REFUEL_RATE * dt);
 
     // Soft wall at the sector's edge.
     const R = this.view.params.radiusPx * 0.97, d = Math.hypot(s.x, s.y);
@@ -432,6 +483,210 @@ export class Engine {
         });
       }
     }
+    if (this.stage) this.emitDamage(dt);
+  }
+
+  /** Smoke trails from every crater, sparks as it gets worse, open flame when critical. */
+  private emitDamage(dt: number) {
+    if (this.cam.zoom < 1 || this.parts.length > 900) return;
+    const s = this.ship, st = this.stage, r = () => Math.random() - 0.5;
+    const yaw = modelYaw(s.heading), roll = Math.round(-s.bank * BANK_LEVELS) * BANK_ANGLE;
+    for (const h of shipHits(this.hull.id, st)) {
+      const [ox, oy] = projectPoint(h, yaw, roll), x = s.x + ox, y = s.y - this.hull.alt + oy;
+      if (Math.random() < dt * (5 + st * 4)) {
+        // Smoke is left behind in world space, so a moving ship drags a trail.
+        const life = 1.2 + Math.random() * 1.2, g = 40 + Math.floor(Math.random() * 30);
+        this.parts.push({
+          x, y, vx: s.vx * 0.15 + r() * 8, vy: s.vy * 0.15 - 8 - Math.random() * 8,
+          life, max: life, col: `rgb(${g},${g + 3},${g + 10})`, a: 0.7, solid: true, drag: 0.8, size: Math.random() < 0.5 ? 2 : 1,
+        });
+      }
+      if (Math.random() < dt * st * 0.8) this.sparks(x, y, 3 + Math.floor(Math.random() * 4));
+      if (st === 3 && Math.random() < dt * 25) {
+        const life = 0.2 + Math.random() * 0.25;
+        this.parts.push({ x: x + r() * 2, y, vx: s.vx * 0.5 + r() * 6, vy: s.vy * 0.5 - 14, life, max: life, col: Math.random() < 0.3 ? '#ffd27a' : '#ff6a2a', a: 0.9 });
+      }
+    }
+  }
+
+  private sparks(x: number, y: number, n: number) {
+    const s = this.ship;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 70, life = 0.15 + Math.random() * 0.25;
+      this.parts.push({
+        x, y, vx: Math.cos(a) * sp + s.vx * 0.8, vy: Math.sin(a) * sp * PITCH_SIN - 15 + s.vy * 0.8,
+        life, max: life, col: Math.random() < 0.5 ? '#ffffff' : '#ffd27a', drag: 4,
+      });
+    }
+  }
+
+  /** Closest finished friendly Fuel Depot within range of the ship's shadow, if any. */
+  private nearestDepot() {
+    const s = this.ship, at = pick(s.x, s.y);
+    if (!at) return null;
+    const me = this.view.meta!.player, now = this.view.now(), n = Math.ceil(DEPOT_RANGE / RH) + 1;
+    let best: { x: number; y: number } | null = null, bd = DEPOT_RANGE;
+    for (let r = at[1] - n; r <= at[1] + n; r++)
+      for (let c = at[0] - n; c <= at[0] + n; c++) {
+        const st = this.view.structure(c, r);
+        if (!st || st.kind !== 'depot' || st.owner !== me || progressOf(st, now) < 1) continue;
+        const x = tileX(c, r) + CX, y = tileY(r) + CY, d = Math.hypot(x - s.x, y - s.y);
+        if (d < bd) {
+          bd = d;
+          best = { x, y };
+        }
+      }
+    return best;
+  }
+
+  private damageShip(amount: number) {
+    if (this.wreck > 0) return;
+    this.vitals.hp = Math.max(0, this.vitals.hp - amount);
+    if (!this.vitals.hp) return this.explodeShip();
+    this.syncDamage();
+    // Impact: a shower of sparks and a small flash from one of the wounds.
+    const s = this.ship, hits = shipHits(this.hull.id, this.stage);
+    const h = hits.length ? hits[Math.floor(Math.random() * hits.length)] : ([0, 0, 0] as [number, number, number]);
+    const [ox, oy] = projectPoint(h, modelYaw(s.heading), Math.round(-s.bank * BANK_LEVELS) * BANK_ANGLE);
+    const x = s.x + ox, y = s.y - this.hull.alt + oy;
+    this.sparks(x, y, 18);
+    this.booms.push({ x, y, t: 0, size: 0.35 });
+    this.shake = Math.max(this.shake, 2);
+  }
+
+  /** Back at the home Nexus with a full tank and hull. */
+  private respawn() {
+    const meta = this.view.meta!, home = meta.homes[meta.player];
+    Object.assign(this.ship, newFlight(tileX(home.col, home.row) + CX + 48, tileY(home.row) + CY + 30, -Math.PI / 2));
+    this.vitals.hp = this.vitals.maxHp;
+    this.vitals.fuel = this.vitals.maxFuel;
+    this.syncDamage();
+    this.focusShip();
+  }
+
+  /** Blow the flagship apart: tumbling hull chunks, voxel debris and a fireball. It respawns at home a few seconds later. */
+  private explodeShip() {
+    const s = this.ship, oy = s.y - this.hull.alt, m = this.shipSprites.model;
+    const yaw = modelYaw(s.heading), roll = Math.round(-s.bank * BANK_LEVELS) * BANK_ANGLE;
+    const rgb = FACTIONS[this.view.meta!.player].rgb, r = () => Math.random() - 0.5;
+
+    // Chunks: the hull itself, fractured. Each starts exactly where it sat and is thrown outward and up.
+    const n = Math.max(4, Math.min(8, Math.round((m.sx * m.sy) / 250)));
+    for (const p of splitModel(m, n, Math.floor(Math.random() * 1e9))) {
+      const [ox, oy2] = projectPoint(p.offset, yaw, roll);
+      const d = Math.hypot(...p.offset) || 1, sp = 35 + Math.random() * 45;
+      const [vx, vy] = projectPoint([(p.offset[0] / d + r()) * sp, (p.offset[1] / d + r()) * sp, 0], yaw, roll);
+      const life = 5 + Math.random() * 2;
+      this.wrecks.push({
+        spr: new ShipSprites(p.model, rgb, true),
+        x: s.x + ox, y: s.y + oy2, z: this.hull.alt, vx: vx + s.vx * 0.5, vy: vy + s.vy * 0.5, vz: 25 + Math.random() * 35,
+        yaw, roll, spin: r() * 5, tumble: r() * 6, life, max: life, landed: false,
+        pop: Math.random() < 0.5 ? 0.3 + Math.random() * 1.4 : 0,
+      });
+    }
+    // Loose voxels: the small stuff, some of it in bigger flakes.
+    for (const d of shatter(m, yaw, roll, accentRamp(rgb), 700)) {
+      const life = 1.6 + Math.random() * 2;
+      this.parts.push({
+        x: s.x + d.x, y: oy + d.y, vx: d.vx * 1.4 + s.vx * 0.6, vy: d.vy * 1.4 + s.vy * 0.6,
+        life, max: life, col: css(d.col), solid: !d.glow, drag: 1, size: Math.random() < 0.3 ? 2 : 1,
+      });
+    }
+    // Fireball: a fast hot shell and a slower, longer-burning core.
+    for (let i = 0; i < 180; i++) {
+      const core = i % 3 === 0, a = Math.random() * Math.PI * 2, sp = core ? 15 + Math.random() * 40 : 60 + Math.random() * 150;
+      const life = core ? 0.6 + Math.random() * 0.6 : 0.25 + Math.random() * 0.5;
+      this.parts.push({
+        x: s.x + r() * 6, y: oy + r() * 4, vx: Math.cos(a) * sp + s.vx * 0.6, vy: Math.sin(a) * sp * PITCH_SIN + s.vy * 0.6 - (core ? 10 : 0),
+        life, max: life, col: core ? (Math.random() < 0.5 ? '#ff6a2a' : '#ffd27a') : Math.random() < 0.35 ? '#ffffff' : '#ffa64a',
+        drag: core ? 2 : 3, size: core ? 2 : 1,
+      });
+    }
+    this.booms.push({ x: s.x, y: oy, t: 0, size: 1.4, ring: true });
+    this.shake = 8;
+    this.depot = null;
+    this.wreck = 3;
+    this.shipTarget = null;
+    s.vx = s.vy = s.turn = s.thrust = 0;
+  }
+
+  private solidUnder(x: number, y: number) {
+    const t = pick(x, y), k = t && this.view.kind(t[0], t[1]);
+    return !!k && k !== 'void';
+  }
+
+  /** Chunks fly, fall and bounce onto the plates (or drop into the void), smoking as they go. */
+  private updateWrecks(dt: number) {
+    const r = () => Math.random() - 0.5;
+    for (const w of this.wrecks) {
+      w.life -= dt;
+      const f = Math.exp(-(w.landed ? 5 : 0.5) * dt);
+      w.vx *= f;
+      w.vy *= f;
+      w.x += w.vx * dt;
+      w.y += w.vy * dt;
+      if (!w.landed) {
+        w.vz -= 45 * dt;
+        w.z += w.vz * dt;
+        w.yaw += w.spin * dt;
+        w.roll += w.tumble * dt;
+        if (w.z <= 0 && w.z > -4 && this.solidUnder(w.x, w.y)) {
+          w.z = 0;
+          if (w.vz < -18) {
+            // Bounce off the deck, losing most of the energy and spin.
+            w.vz *= -0.35;
+            w.spin *= 0.5;
+            w.tumble *= 0.4;
+            this.sparks(w.x, w.y, 5);
+          } else w.landed = true;
+        }
+      }
+      const sx = w.x, sy = w.y - w.z;
+      if (w.pop > 0 && (w.pop -= dt) <= 0) {
+        this.sparks(sx, sy, 24);
+        this.booms.push({ x: sx, y: sy, t: 0, size: 0.5 });
+        this.shake = Math.max(this.shake, 3);
+        w.vz += 20;
+      }
+      const age = w.max - w.life;
+      if (Math.random() < dt * 14 * (w.life / w.max)) {
+        const life = 1 + Math.random(), g = 35 + Math.floor(Math.random() * 30);
+        this.parts.push({ x: sx + r() * 4, y: sy + r() * 3, vx: r() * 6, vy: -6 - Math.random() * 6, life, max: life, col: `rgb(${g},${g + 3},${g + 10})`, a: 0.7, solid: true, drag: 0.8, size: 2 });
+      }
+      if (age < 1.5 && Math.random() < dt * 30) {
+        const life = 0.2 + Math.random() * 0.25;
+        this.parts.push({ x: sx + r() * 3, y: sy, vx: w.vx * 0.5 + r() * 8, vy: w.vy * 0.5 - 12, life, max: life, col: Math.random() < 0.3 ? '#ffd27a' : '#ff6a2a', a: 0.9 });
+      }
+    }
+    this.wrecks = this.wrecks.filter((w) => w.life > 0 && w.z > -150);
+    this.booms = this.booms.filter((b) => (b.t += dt) < 1);
+    this.shake *= Math.exp(-dt * 6);
+  }
+
+  private drawWrecks(c: CanvasRenderingContext2D, e: CanvasRenderingContext2D) {
+    for (const w of this.wrecks) {
+      const f = w.spr.pose(w.yaw, w.roll), half = w.spr.size / 2;
+      const gx = Math.round(w.x), sx = gx - half, sy = Math.round(w.y - w.z) - half;
+      // Fade out at end of life, and as it falls away into the void.
+      const a = Math.min(1, w.life / 1.2) * Math.min(1, 1 + w.z / 100);
+      if (w.z > 0 && this.solidUnder(w.x, w.y)) {
+        c.globalAlpha = 0.35 * a;
+        c.fillStyle = '#000';
+        c.beginPath();
+        c.ellipse(gx, Math.round(w.y) + 1, half * 0.4, half * 0.16, 0, 0, Math.PI * 2);
+        c.fill();
+      }
+      c.globalAlpha = e.globalAlpha = a;
+      c.drawImage(f.color, sx, sy);
+      e.drawImage(f.emit, sx, sy);
+      // Fresh breaks glow hot and cool over the first seconds.
+      const heat = Math.max(0, 1 - (w.max - w.life) / 1.5);
+      if (heat) {
+        e.globalAlpha = heat * 0.6 * a;
+        e.drawImage(f.color, sx, sy);
+      }
+    }
+    c.globalAlpha = e.globalAlpha = 1;
   }
 
   private updateCamera(dt: number) {
@@ -510,6 +765,7 @@ export class Engine {
       zoom: this.cam.tz,
       selected: this.selected ? this.snap(this.selected[0], this.selected[1], false) : null,
       hover: this.hover ? this.snap(this.hover[0], this.hover[1], true) : null,
+      ship: { ...this.vitals, refuelling: !!this.depot, wrecked: this.wreck > 0 },
     });
   }
 
@@ -546,6 +802,11 @@ export class Engine {
 
     for (const p of this.parts) {
       p.life -= dt;
+      if (p.drag) {
+        const f = Math.exp(-p.drag * dt);
+        p.vx *= f;
+        p.vy *= f;
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
     }
@@ -571,7 +832,8 @@ export class Engine {
     const bufScale = Math.max(zoom, TACTICAL_ZOOM) * dpr;
     const k = (zoom * dpr) / bufScale;
     const vw = pw / (zoom * dpr), vh = ph / (zoom * dpr);
-    const ox0 = this.cam.x - vw / 2, oy0 = this.cam.y - vh / 2;
+    const jx = (Math.random() - 0.5) * this.shake, jy = (Math.random() - 0.5) * this.shake;
+    const ox0 = this.cam.x + jx - vw / 2, oy0 = this.cam.y + jy - vh / 2;
     let ox = ox0, oy = oy0, fx = 0, fy = 0;
     if (k === 1) {
       // Integer origin + fractional shift in the shader: crisp pixels, smooth pan.
@@ -658,13 +920,33 @@ export class Engine {
     if (zoom >= 1) {
       this.drawShips(c, e, l);
       for (const p of this.parts) {
-        e.globalAlpha = Math.min(1, (p.life / p.max) * 1.6) * (p.a ?? 1);
-        e.fillStyle = p.col;
-        e.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
+        const g = p.solid ? c : e;
+        g.globalAlpha = Math.min(1, (p.life / p.max) * 1.6) * (p.a ?? 1);
+        g.fillStyle = p.col;
+        g.fillRect(Math.round(p.x), Math.round(p.y), p.size ?? 1, p.size ?? 1);
       }
-      e.globalAlpha = 1;
+      c.globalAlpha = e.globalAlpha = 1;
+      this.drawWrecks(c, e);
     }
-    if (zoom > MAP_FADE[1]) this.drawFlagship(t);
+    if (zoom > MAP_FADE[1] && !this.wreck) this.drawFlagship(t);
+    for (const { x, y, t: bt, size, ring } of this.booms) {
+      // Flash that lights the surrounding plates, fading fast.
+      const R = (40 + bt * 60) * size;
+      l.globalAlpha = Math.max(0, 1 - bt) ** 2 * Math.min(1, size * 2);
+      l.drawImage(assets.light('#ffa64a'), x - R, y - R, R * 2, R * 2);
+      if (ring && bt < 0.6) {
+        // Shockwave racing out across the deck.
+        const rr = 8 + bt * 160 * size;
+        e.globalAlpha = (1 - bt / 0.6) * 0.8;
+        e.strokeStyle = '#ffd27a';
+        e.lineWidth = 1;
+        e.beginPath();
+        e.ellipse(Math.round(x) + 0.5, Math.round(y + this.hull.alt) + 0.5, rr, rr * PITCH_SIN, 0, 0, Math.PI * 2);
+        e.stroke();
+        e.globalAlpha = 1;
+      }
+    }
+    l.globalAlpha = 1;
     if (mapA > 0) this.drawFlagshipMarker(mapA, k);
     this.drawOverlays(t, k);
     if (this.debug) this.drawDebug(ox, oy, wx1, wy1, k);
@@ -886,6 +1168,18 @@ export class Engine {
     l.globalAlpha = 0.12 + 0.3 * s.thrust;
     l.drawImage(assets.light(col), ex - 30, ey - 30, 60, 60);
     l.globalAlpha = 1;
+
+    if (this.depot) {
+      // Fuel line: amber pulses run from the depot's boom up to the ship.
+      const { x, y } = this.depot, y0 = y - 18, x1 = gx, y1 = Math.round(s.y - alt), len = Math.hypot(x1 - x, y1 - y0);
+      e.fillStyle = '#ffa64a';
+      for (let d = (t * 40) % 6; d < len; d += 6) {
+        const u = d / len;
+        e.globalAlpha = 0.4 + 0.6 * Math.sin(u * Math.PI);
+        e.fillRect(Math.round(x + (x1 - x) * u), Math.round(y0 + (y1 - y0) * u), 1, 1);
+      }
+      e.globalAlpha = 1;
+    }
 
     if (this.shipTarget) {
       const { x, y } = this.shipTarget, r = 6 + 2 * Math.sin(t * 6);
