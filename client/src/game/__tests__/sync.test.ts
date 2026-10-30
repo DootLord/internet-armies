@@ -94,6 +94,7 @@ describe('chunk streaming', () => {
       unsubscribe: (k) => s.unsubscribe(k),
       build: (...a) => s.build(...a),
       demolish: (...a) => s.demolish(...a),
+      fire: (o) => s.fire(o),
       now: () => s.now(),
     }));
     await view.connect();

@@ -6,7 +6,7 @@ import { DebugPanel } from './ui/DebugPanel';
 import { Fitting } from './ui/Fitting';
 import { Feed } from './ui/Feed';
 import { Minimap } from './ui/Minimap';
-import { BuildBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
+import { AimBanner, BuildBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
 import { SelectionPanel } from './ui/SelectionPanel';
 import { ShipStatus } from './ui/ShipStatus';
 import { installSkin } from './ui/skin';
@@ -52,6 +52,7 @@ export function App() {
           <Feed />
           <BuildBanner />
           <PilotBanner />
+          <AimBanner />
           <Toasts />
           <Minimap />
           <SelectionPanel />

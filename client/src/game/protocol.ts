@@ -2,6 +2,8 @@
 // over socket.io unchanged: the LocalShard implements it in-process today, the
 // Node server implements it later, and WorldView never knows the difference.
 import type { Res, StructureKind } from './defs';
+import type { Fit } from './ships/fitting';
+import type { HullId } from './ships/hulls';
 
 export interface BuildCheck {
   ok: boolean;
@@ -18,7 +20,17 @@ export interface Structure {
   startedAt: number;
   finishAt: number;
   level: number;
+  /**
+   * Health, derived like construction: `hp` at server time `hpAt`, falling at
+   * `drain` per second while something fires on it. Clients compute the live
+   * value every frame; the shard only sends an update when the rate changes.
+   */
+  hp: number;
+  hpAt: number;
+  drain: number;
 }
+
+export const hpOf = (s: Structure, now: number) => Math.max(0, s.hp - s.drain * Math.max(0, now - s.hpAt));
 
 export const progressOf = (s: Structure, now: number) =>
   s.finishAt <= s.startedAt ? 1 : Math.min(1, Math.max(0, (now - s.startedAt) / (s.finishAt - s.startedAt)));
@@ -48,6 +60,22 @@ export interface ChunkDelta {
   upserts?: Structure[];
   /** Local indices whose structure was removed. */
   removes?: number[];
+  /** The subset of `removes` that were destroyed by fire (clients play the explosion). */
+  destroyed?: number[];
+}
+
+/**
+ * What the shooter tells the shard when it opens fire. Interim: once flagships
+ * live on the server, position and fit come from server state and this shrinks
+ * to the target id. The shard already recomputes damage and range from the fit
+ * with the shared fitting rules, so the client can't just claim a number.
+ */
+export interface FireOrder {
+  target: number;
+  x: number;
+  y: number;
+  hull: HullId;
+  fit: Fit;
 }
 
 export interface PlayerState {
@@ -103,6 +131,8 @@ export interface WorldSource {
   unsubscribe(keys: number[]): void;
   build(kind: StructureKind, col: number, row: number): Promise<BuildCheck>;
   demolish(col: number, row: number): Promise<BuildCheck>;
+  /** Start firing at a structure, or stop with null. One target per shooter. */
+  fire(order: FireOrder | null): Promise<BuildCheck>;
   /** Server clock in seconds. */
   now(): number;
 }

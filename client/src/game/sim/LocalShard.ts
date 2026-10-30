@@ -7,9 +7,11 @@ import { mulberry32 } from '../rng';
 import { CHUNK_TILES, CS, CS_BITS, chunkKeyOf, localIndex, pack, unpackA, unpackB } from '../chunks';
 import { fillChunk, KIND_ID, KINDS, TerrainParams, tileCenterX, tileCenterY, VOID } from '../terrain';
 import { canBuild, WorldRead } from '../rules';
+import { hpOf } from '../protocol';
 import type {
-  BuildCheck, ChunkDelta, ChunkSnapshot, Overview, PlayerState, SourceHandlers, Structure, WorldEvent, WorldMeta, WorldSource,
+  BuildCheck, ChunkDelta, ChunkSnapshot, FireOrder, Overview, PlayerState, SourceHandlers, Structure, WorldEvent, WorldMeta, WorldSource,
 } from '../protocol';
+import { computeStats, weaponStats } from '../ships/fitting';
 
 export interface ShardOptions {
   seed: number;
@@ -29,6 +31,9 @@ export class LocalShard implements WorldSource, WorldRead {
   private overrides = new Map<number, number>();
   private owners = new Map<number, number>();
   private structs = new Map<number, Structure>();
+  private byId = new Map<number, Structure>();
+  /** What the player is shooting. A real shard keeps one entry per shooter. */
+  private firing: Structure | null = null;
   private building = new Set<Structure>();
   private factionTiles: Set<number>[] = FACTIONS.map(() => new Set());
   private factionStructs: Set<Structure>[] = FACTIONS.map(() => new Set());
@@ -141,6 +146,46 @@ export class LocalShard implements WorldSource, WorldRead {
     return this.reply(r);
   }
 
+  fire(order: FireOrder | null): Promise<BuildCheck> {
+    this.ceaseFire();
+    if (!order) return this.reply({ ok: true });
+    const s = this.byId.get(order.target);
+    if (!s) return this.reply({ ok: false, reason: 'Target lost' });
+    // Recompute damage from the fit with the shared rules: never trust a number from the client.
+    const st = computeStats(order.hull, order.fit);
+    if (st.cpuUsed > st.cpu + 1e-9 || st.powerUsed > st.power + 1e-9) return this.reply({ ok: false, reason: 'Invalid fit' });
+    const w = weaponStats(order.hull, order.fit, 'pulse-laser');
+    if (!w.count) return this.reply({ ok: false, reason: 'No Pulse Laser fitted' });
+    if (Math.hypot(tileCenterX(s.col, s.row) - order.x, tileCenterY(s.row) - order.y) > w.range) return this.reply({ ok: false, reason: 'Out of range' });
+    this.setDrain(s, w.dps);
+    this.firing = s;
+    this.flush();
+    return this.reply({ ok: true });
+  }
+
+  private ceaseFire() {
+    if (this.firing && this.byId.has(this.firing.id)) this.setDrain(this.firing, 0);
+    this.firing = null;
+    this.flush();
+  }
+
+  /** Settle health at the current time, then change the rate: the only update clients need. */
+  private setDrain(s: Structure, drain: number) {
+    const now = this.now();
+    s.hp = hpOf(s, now);
+    s.hpAt = now;
+    s.drain = drain;
+    this.upsertStruct(s);
+  }
+
+  private destroy(s: Structure) {
+    if (this.firing === s) this.firing = null;
+    this.removeStruct(s);
+    (this.delta(s.col, s.row).destroyed ??= []).push(localIndex(s.col, s.row));
+    this.emit({ faction: s.owner, type: 'info', col: s.col, row: s.row, text: `lost a ${STRUCT[s.kind].name} to weapons fire` });
+    if (s.owner === PLAYER) this.sendPlayer();
+  }
+
   // ---------------------------------------------------------------- WorldRead
   kindId(col: number, row: number) {
     const o = this.overrides.get(pack(col, row));
@@ -191,6 +236,7 @@ export class LocalShard implements WorldSource, WorldRead {
 
   private upsertStruct(s: Structure) {
     this.structs.set(pack(s.col, s.row), s);
+    this.byId.set(s.id, s);
     this.factionStructs[s.owner].add(s);
     if (s.owner === PLAYER) this.rateCache = null;
     (this.delta(s.col, s.row).upserts ??= []).push({ ...s });
@@ -198,6 +244,7 @@ export class LocalShard implements WorldSource, WorldRead {
 
   private removeStruct(s: Structure) {
     this.structs.delete(pack(s.col, s.row));
+    this.byId.delete(s.id);
     this.factionStructs[s.owner].delete(s);
     this.building.delete(s);
     if (s.owner === PLAYER) this.rateCache = null;
@@ -240,6 +287,9 @@ export class LocalShard implements WorldSource, WorldRead {
   step(dt: number) {
     const now = this.now();
     for (const s of this.building) if (now >= s.finishAt) { this.building.delete(s); this.complete(s, false); }
+    // No damage ticks: health is a straight line, so just check whether it has reached zero.
+    if (this.firing && !this.byId.has(this.firing.id)) this.firing = null;
+    if (this.firing && hpOf(this.firing, now) <= 0) this.destroy(this.firing);
     this.tickAcc += dt;
     while (this.tickAcc >= 1) {
       this.tickAcc -= 1;
@@ -306,7 +356,9 @@ export class LocalShard implements WorldSource, WorldRead {
 
   private place(kind: StructureKind, col: number, row: number, f: number, instant: boolean) {
     const now = this.now();
-    const s: Structure = { id: this.nextId++, kind, owner: f, col, row, startedAt: now, finishAt: instant ? now : now + STRUCT[kind].buildTime, level: 1 };
+    const s: Structure = { id: this.nextId++, kind, owner: f, col, row, startedAt: now, finishAt: instant ? now : now + STRUCT[kind].buildTime, level: 1,
+      hp: STRUCT[kind].hp, hpAt: now, drain: 0,
+    };
     if (this.owner(col, row) === -1 && kind !== 'relay') this.setOwner(col, row, f);
     this.upsertStruct(s);
     if (instant) this.complete(s, true);

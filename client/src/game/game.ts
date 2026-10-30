@@ -12,7 +12,7 @@ export interface TileSnap {
   kind: TileKind;
   variant: number;
   owner: number;
-  structure: null | { kind: StructureKind; progress: number; level: number; owner: number; finishAt: number };
+  structure: null | { kind: StructureKind; progress: number; level: number; owner: number; finishAt: number; hp: number; maxHp: number };
   /** False while the chunk's live state hasn't arrived yet. */
   known: boolean;
   ok?: boolean;
@@ -38,7 +38,9 @@ export interface HudState {
   zoom: number;
   pilot: boolean;
   fittingOpen: boolean;
-  ship: Vitals & { refuelling: boolean; wrecked: boolean };
+  /** Mouse mode: aiming weapons rather than selecting and placing. */
+  aim: boolean;
+  ship: Vitals & { refuelling: boolean; wrecked: boolean; firing: boolean };
 }
 
 // ?radius=40000 (world px) for stress tests; the default disc is ~0.9M hex slots.
@@ -59,7 +61,8 @@ export const hud = createStore<HudState>({
   zoom: 3,
   pilot: false,
   fittingOpen: false,
-  ship: { hp: 0, maxHp: 0, fuel: 0, maxFuel: 0, refuelling: false, wrecked: false },
+  aim: false,
+  ship: { hp: 0, maxHp: 0, fuel: 0, maxFuel: 0, refuelling: false, wrecked: false, firing: false },
 });
 
 world.listeners = {

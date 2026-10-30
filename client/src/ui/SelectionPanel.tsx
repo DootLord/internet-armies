@@ -10,9 +10,10 @@ const CONTROLS: [string, string][] = [
   ['RMB', 'Fly to'],
   ['F', 'Find ship'],
   ['G', 'Hangar'],
+  ['E', 'Aim weapons'],
   ['Drag', 'Pan'],
   ['Wheel', 'Zoom'],
-  ['1–7', 'Build'],
+  ['1–9', 'Build'],
   ['M', 'Map'],
   ['H', 'Home'],
 ];
@@ -68,6 +69,14 @@ export function SelectionPanel() {
           </div>
         ) : (
           <p className="sel-desc">{def ? def.desc : tile.desc}</p>
+        )}
+        {s && s.hp < s.maxHp && (
+          <div className="bar f-inset">
+            <div className="bar-fill" style={{ width: `${(s.hp / s.maxHp) * 100}%`, background: s.hp / s.maxHp > 0.3 ? 'var(--warn)' : 'var(--bad)' }} />
+            <span className="bar-text">
+              Structure · {Math.ceil(s.hp)} / {s.maxHp}
+            </span>
+          </div>
         )}
 
         <div className="sel-foot">

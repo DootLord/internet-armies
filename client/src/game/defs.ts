@@ -39,18 +39,20 @@ export interface StructureDef {
   produce: (tile: TileKind) => Partial<Res>;
   claim?: number;
   light: number;
+  /** Structure points: how much fire it takes to destroy. */
+  hp: number;
 }
 
 export const STRUCTURES: StructureDef[] = [
-  { kind: 'nexus', name: 'Command Nexus', role: 'Core', desc: "A faction's seat of power. Claims the surrounding sectors.", cost: {}, buildTime: 1, place: 'none', produce: () => ({ credits: 4, alloy: 2, energy: 6 }), claim: 3, light: 70 },
-  { kind: 'extractor', name: 'Deep Extractor', role: 'Economy', desc: 'Drills deposits for alloy, crystal or energy.', cost: { credits: 120, alloy: 40 }, buildTime: 10, place: 'deposit', produce: (t) => ({ ...TILE_INFO[t].deposit, energy: (TILE_INFO[t].deposit?.energy ?? 0) - 1 }), light: 40 },
-  { kind: 'solar', name: 'Solar Array', role: 'Power', desc: 'Harvests starlight. Cheap, reliable energy.', cost: { credits: 80, alloy: 30 }, buildTime: 7, place: 'owned', produce: () => ({ energy: 4 }), light: 34 },
-  { kind: 'habitat', name: 'Habitat Ring', role: 'Economy', desc: 'Houses crews and generates credits.', cost: { credits: 150, alloy: 80 }, buildTime: 14, place: 'owned', produce: () => ({ credits: 5, energy: -2 }), light: 48 },
-  { kind: 'turret', name: 'Pulse Battery', role: 'Defense', desc: 'Point-defense cannons. Deters raiders.', cost: { credits: 200, alloy: 120, crystal: 10 }, buildTime: 18, place: 'owned', produce: () => ({ energy: -2 }), light: 36 },
-  { kind: 'shield', name: 'Aegis Pylon', role: 'Defense', desc: 'Projects a protective barrier dome.', cost: { credits: 260, alloy: 100, crystal: 30 }, buildTime: 22, place: 'owned', produce: () => ({ energy: -3 }), light: 54 },
-  { kind: 'relay', name: 'Claim Relay', role: 'Expansion', desc: 'Built on the frontier. Extends your territory.', cost: { credits: 300, alloy: 150 }, buildTime: 25, place: 'frontier', produce: () => ({ energy: -1 }), claim: 2, light: 44 },
-  { kind: 'dronebay', name: 'Drone Bay', role: 'Logistics', desc: 'Launches haulers between your structures.', cost: { credits: 220, alloy: 140 }, buildTime: 18, place: 'owned', produce: () => ({ credits: 2, energy: -2 }), light: 46 },
-  { kind: 'depot', name: 'Fuel Depot', role: 'Logistics', desc: 'Refuels your ships while they hover nearby.', cost: { credits: 140, alloy: 60 }, buildTime: 12, place: 'owned', produce: () => ({ energy: -1 }), light: 42 },
+  { kind: 'nexus', name: 'Command Nexus', role: 'Core', desc: "A faction's seat of power. Claims the surrounding sectors.", cost: {}, buildTime: 1, place: 'none', produce: () => ({ credits: 4, alloy: 2, energy: 6 }), claim: 3, light: 70, hp: 6000 },
+  { kind: 'extractor', name: 'Deep Extractor', role: 'Economy', desc: 'Drills deposits for alloy, crystal or energy.', cost: { credits: 120, alloy: 40 }, buildTime: 10, place: 'deposit', produce: (t) => ({ ...TILE_INFO[t].deposit, energy: (TILE_INFO[t].deposit?.energy ?? 0) - 1 }), light: 40, hp: 900 },
+  { kind: 'solar', name: 'Solar Array', role: 'Power', desc: 'Harvests starlight. Cheap, reliable energy.', cost: { credits: 80, alloy: 30 }, buildTime: 7, place: 'owned', produce: () => ({ energy: 4 }), light: 34, hp: 600 },
+  { kind: 'habitat', name: 'Habitat Ring', role: 'Economy', desc: 'Houses crews and generates credits.', cost: { credits: 150, alloy: 80 }, buildTime: 14, place: 'owned', produce: () => ({ credits: 5, energy: -2 }), light: 48, hp: 1400 },
+  { kind: 'turret', name: 'Pulse Battery', role: 'Defense', desc: 'Point-defense cannons. Deters raiders.', cost: { credits: 200, alloy: 120, crystal: 10 }, buildTime: 18, place: 'owned', produce: () => ({ energy: -2 }), light: 36, hp: 1800 },
+  { kind: 'shield', name: 'Aegis Pylon', role: 'Defense', desc: 'Projects a protective barrier dome.', cost: { credits: 260, alloy: 100, crystal: 30 }, buildTime: 22, place: 'owned', produce: () => ({ energy: -3 }), light: 54, hp: 2200 },
+  { kind: 'relay', name: 'Claim Relay', role: 'Expansion', desc: 'Built on the frontier. Extends your territory.', cost: { credits: 300, alloy: 150 }, buildTime: 25, place: 'frontier', produce: () => ({ energy: -1 }), claim: 2, light: 44, hp: 1600 },
+  { kind: 'dronebay', name: 'Drone Bay', role: 'Logistics', desc: 'Launches haulers between your structures.', cost: { credits: 220, alloy: 140 }, buildTime: 18, place: 'owned', produce: () => ({ credits: 2, energy: -2 }), light: 46, hp: 1300 },
+  { kind: 'depot', name: 'Fuel Depot', role: 'Logistics', desc: 'Refuels your ships while they hover nearby.', cost: { credits: 140, alloy: 60 }, buildTime: 12, place: 'owned', produce: () => ({ energy: -1 }), light: 42, hp: 800 },
 ];
 export const STRUCT = Object.fromEntries(STRUCTURES.map((s) => [s.kind, s])) as Record<StructureKind, StructureDef>;
 export const BUILDABLE = STRUCTURES.filter((s) => s.place !== 'none');

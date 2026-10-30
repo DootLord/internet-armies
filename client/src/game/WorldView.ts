@@ -7,7 +7,7 @@ import { emptyRes, StructureKind, TileKind } from './defs';
 import { Chunk, CHUNK_PX_H, CHUNK_PX_W, chunkKeyOf, localIndex, pack } from './chunks';
 import { fillChunk, KINDS, TerrainParams } from './terrain';
 import { canBuild, isAdjacentTo, WorldRead } from './rules';
-import type { BuildCheck, ChunkDelta, ChunkSnapshot, Overview, PlayerState, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
+import type { BuildCheck, ChunkDelta, FireOrder, ChunkSnapshot, Overview, PlayerState, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
 
 /** Beyond this many chunks in view, stop per-chunk streaming and rely on the overview. */
 export const MAX_DETAIL_CHUNKS = 300;
@@ -31,6 +31,8 @@ export interface ViewListeners {
   event?: (e: WorldEvent) => void;
   player?: (p: PlayerState) => void;
   overview?: (o: Overview) => void;
+  /** A structure in a watched chunk was destroyed by fire (not demolished). */
+  destroyed?: (s: Structure) => void;
 }
 
 export class WorldView implements WorldRead {
@@ -114,6 +116,10 @@ export class WorldView implements WorldRead {
 
   demolish(col: number, row: number) {
     return this.source.demolish(col, row);
+  }
+
+  fire(order: FireOrder | null) {
+    return this.source.fire(order);
   }
 
   // ---------------------------------------------------------------- streaming
@@ -251,6 +257,11 @@ export class WorldView implements WorldRead {
     if (d.rev !== c.rev + 1) return this.resync(c);
     if (d.owners) for (const [i, f] of d.owners) c.owner[i] = f;
     if (d.terrain) for (const [i, k] of d.terrain) c.kind[i] = k;
+    if (d.destroyed)
+      for (const i of d.destroyed) {
+        const old = c.structures.get(i);
+        if (old) this.listeners.destroyed?.(old);
+      }
     if (d.removes)
       for (const i of d.removes) {
         const old = c.structures.get(i);

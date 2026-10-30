@@ -345,6 +345,62 @@ class Painter {
   }
 }
 
+export interface SpriteShard { color: HTMLCanvasElement; emit: HTMLCanvasElement; w: number; h: number; x: number; y: number }
+export interface SpritePixel { x: number; y: number; col: RGB; glow: boolean }
+
+/**
+ * The 2D cousin of voxel splitModel: break a painted sprite into jagged chunks
+ * (each opaque pixel joins its nearest seed, with jitter), char the broken
+ * edges with embers, and sample loose pixels for debris. x/y are sprite-space
+ * centres, so every piece starts exactly where it was drawn.
+ */
+export function fractureSprite(src: { color: HTMLCanvasElement; emit: HTMLCanvasElement }, n: number, seed: number, loose = 260) {
+  const W = src.color.width, H = src.color.height;
+  const read = (cv: HTMLCanvasElement) => cv.getContext('2d')!.getImageData(0, 0, W, H).data;
+  const cd = read(src.color), ed = read(src.emit), rnd = mulberry32(seed);
+  const solid: number[] = [];
+  for (let i = 0; i < W * H; i++) if (cd[i * 4 + 3]) solid.push(i);
+  const seeds = Array.from({ length: n }, () => solid[Math.floor(rnd() * solid.length)]);
+  const owner = new Int8Array(W * H).fill(-1);
+  for (const i of solid) {
+    const x = i % W, y = Math.floor(i / W);
+    let best = 0, bd = Infinity;
+    seeds.forEach((sd, q) => {
+      const d = Math.hypot(x - (sd % W), y - Math.floor(sd / W)) + hash2(x, y, q) * 3;
+      if (d < bd) { bd = d; best = q; }
+    });
+    owner[i] = best;
+  }
+  const rgb = (d: Uint8ClampedArray, i: number): RGB => [d[i * 4], d[i * 4 + 1], d[i * 4 + 2]];
+  const pieces: SpriteShard[] = [];
+  for (let q = 0; q < n; q++) {
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (const i of solid) if (owner[i] === q) {
+      const x = i % W, y = Math.floor(i / W);
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+    }
+    if (x1 < 0 || (x1 - x0 + 1) * (y1 - y0 + 1) < 6) continue;
+    const w = x1 - x0 + 1, h = y1 - y0 + 1, c = new Pix(w, h), e = new Pix(w, h);
+    const other = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && owner[y * W + x] >= 0 && owner[y * W + x] !== q;
+    for (const i of solid) {
+      if (owner[i] !== q) continue;
+      const x = i % W, y = Math.floor(i / W);
+      if (other(x - 1, y) || other(x + 1, y) || other(x, y - 1) || other(x, y + 1)) {
+        // Broken edge: charred, with the odd ember.
+        if (hash2(x, y, 11) < 0.3) { c.set(x - x0, y - y0, mix(C_AMBER, C_WHITE, 0.2)); e.set(x - x0, y - y0, C_AMBER, 170); }
+        else c.set(x - x0, y - y0, STEEL[1]);
+      } else {
+        c.set(x - x0, y - y0, rgb(cd, i));
+        if (ed[i * 4 + 3]) e.set(x - x0, y - y0, rgb(ed, i), ed[i * 4 + 3]);
+      }
+    }
+    pieces.push({ color: c.toCanvas(), emit: e.toCanvas(), w, h, x: x0 + w / 2, y: y0 + h / 2 });
+  }
+  const keep = Math.min(1, loose / solid.length), pixels: SpritePixel[] = [];
+  for (const i of solid) if (rnd() < keep) pixels.push({ x: i % W, y: Math.floor(i / W), col: rgb(cd, i), glow: ed[i * 4 + 3] > 100 });
+  return { pieces, pixels };
+}
+
 const S = STEEL;
 const PAINT: Record<StructureKind, (p: Painter) => void> = {
   nexus(p) {

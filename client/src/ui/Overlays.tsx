@@ -7,6 +7,7 @@ export function Tooltip() {
   const ref = useRef<HTMLDivElement>(null);
   const hover = useStore(hud, (s) => s.hover);
   const mode = useStore(hud, (s) => s.buildMode);
+  const aim = useStore(hud, (s) => s.aim);
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
@@ -19,7 +20,7 @@ export function Tooltip() {
   const owner = hover && hover.owner >= 0 ? FACTIONS[hover.owner] : null;
   const s = hover?.structure;
   return (
-    <div ref={ref} className={`tooltip f-tip ${hover ? 'show' : ''}`}>
+    <div ref={ref} className={`tooltip f-tip ${hover && !aim ? 'show' : ''}`}>
       {hover && (
         <>
           <b>{s ? STRUCT[s.kind].name : TILE_INFO[hover.kind].name}</b>
@@ -46,10 +47,21 @@ export function BuildBanner() {
 export function PilotBanner() {
   const pilot = useStore(hud, (s) => s.pilot);
   const mode = useStore(hud, (s) => s.buildMode);
-  if (!pilot || mode) return null;
+  const aim = useStore(hud, (s) => s.aim);
+  if (!pilot || mode || aim) return null;
   return (
     <div className="banner f-tip pilot">
-      <b>Pilot</b> <span className="muted">W/S thrust · A/D steer · Shift boost · Space or Esc to exit</span>
+      <b>Pilot</b> <span className="muted">W/S thrust · A/D steer · Shift boost · E aim weapons · Space or Esc to exit</span>
+    </div>
+  );
+}
+
+export function AimBanner() {
+  const aim = useStore(hud, (s) => s.aim);
+  if (!aim) return null;
+  return (
+    <div className="banner f-tip aim">
+      <b>Weapons hot</b> <span className="muted">Hold LMB to fire at the cursor · E or Esc to stand down</span>
     </div>
   );
 }

@@ -108,3 +108,15 @@ export function flightParams(st: ShipStats): FlightParams {
     turnAccel: st.turnRate * 3.3,
   };
 }
+
+/**
+ * Damage and reach of one weapon type in a fit: every other high-slot module is
+ * set aside, so only that weapon's damage counts, while low and mid upgrades
+ * (stabilizers, sensor arrays) still apply their multipliers.
+ */
+export function weaponStats(hull: HullId, fit: Fit, moduleId: string) {
+  const only: Fit = { ...fit, high: fit.high.map((id) => (id === moduleId ? id : null)) };
+  const count = only.high.filter(Boolean).length;
+  const st = computeStats(hull, only);
+  return { count, dps: count ? st.dps : 0, range: count ? st.range : 0 };
+}

@@ -204,7 +204,7 @@ kbd {
 .sel-meta { display: flex; gap: calc(6 * var(--u)); font-size: 18px; }
 .sel-desc { margin: 0; font-size: 18px; color: var(--txt); }
 .sel-foot { margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: calc(4 * var(--u)); }
-.yields { display: flex; flex-wrap: wrap; align-items: center; gap: calc(2 * var(--u)) calc(6 * var(--u)); font-family: var(--num); font-size: 12px; }
+.yields { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: calc(2 * var(--u)) calc(6 * var(--u)); font-family: var(--num); font-size: 12px; }
 .yields > span { display: inline-flex; align-items: center; gap: calc(var(--u)); }
 .yields .up { color: var(--good); }
 .yields .down { color: var(--bad); }
@@ -240,6 +240,8 @@ kbd {
 }
 .banner b { color: var(--good); }
 .banner.pilot b { color: var(--acc); }
+.banner.aim b { color: var(--bad); }
+.game-canvas.aim { cursor: none; }
 .toasts { position: absolute; top: calc(40 * var(--u)); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: calc(2 * var(--u)); }
 .toast { font-size: 22px; text-shadow: var(--outline); animation: rise 0.2s steps(3) both; }
 .toast.bad { color: var(--bad); }

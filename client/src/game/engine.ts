@@ -2,15 +2,15 @@ import { BUILDABLE, FACTIONS, STRUCT, StructureKind, TileKind } from './defs';
 import { HudState, TileSnap, toast } from './game';
 import { CX, CY, neighbor, pick, RH, TW, tileX, tileY } from './hex';
 import { Post } from './post';
-import { assets, SOX, SOY, STAR_DOMAIN, TILE_PAD } from './sprites';
+import { assets, fractureSprite, SOX, SOY, SpriteShard, STAR_DOMAIN, TILE_PAD } from './sprites';
 import { Store } from './store';
 import { Chunk, CHUNK_PX_H, CHUNK_PX_W, CS_BITS, localIndex, pack } from './chunks';
 import { KINDS, VOID } from './terrain';
-import { progressOf, Structure } from './protocol';
+import { hpOf, progressOf, Structure } from './protocol';
 import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
 import { hash2, smoothstep } from './rng';
 import type { WorldView } from './WorldView';
-import { computeStats, flightParams } from './ships/fitting';
+import { computeStats, flightParams, weaponStats } from './ships/fitting';
 import { hangar } from './ships/hangar';
 import { HULL, HullDef, hullSprites } from './ships/hulls';
 import { shipHits } from './ships/shapes';
@@ -27,11 +27,18 @@ const layer = (): Layer => {
 
 interface Ship { f: number; x0: number; y0: number; x1: number; y1: number; t: number; dur: number; arc: number; trail: number[] }
 /** `solid` particles are lit debris on the colour layer; the rest glow on the emissive layer. */
-/** A flash of light; `ring` adds a shockwave on the ground plane. */
-interface Boom { x: number; y: number; t: number; size: number; ring?: boolean }
-/** A tumbling chunk of a destroyed hull. x/y is its ground point, z its height above it. */
+/** A flash of light; `ring` adds a shockwave on the ground plane at `gy`. */
+interface Boom { x: number; y: number; t: number; size: number; ring?: boolean; gy?: number }
+/** A pulse laser bolt in flight. */
+interface Bolt { x0: number; y0: number; x1: number; y1: number; t: number; dur: number; col: string; hit: boolean }
+/**
+ * A tumbling chunk of something destroyed. x/y is its ground point, z its
+ * height above it. Hull chunks are voxel models (`spr`, full 3D tumble);
+ * structure chunks are flat sprite pieces (`flat`, spun by `yaw` in 2D).
+ */
 interface Wreck {
-  spr: ShipSprites;
+  spr?: ShipSprites;
+  flat?: SpriteShard;
   x: number; y: number; z: number;
   vx: number; vy: number; vz: number;
   yaw: number; roll: number; spin: number; tumble: number;
@@ -103,6 +110,17 @@ export class Engine {
   /** Seconds until the flagship reappears after exploding, and the fireball's light. */
   private wreck = 0;
   private booms: Boom[] = [];
+  /** Structure id we're firing on, the fitted pulse lasers, and bolts in flight. */
+  private target: number | null = null;
+  private laser = { count: 0, dps: 0, range: 0 };
+  private bolts: Bolt[] = [];
+  private shotAcc = 0;
+  private muzzle = 1;
+  /** Aim mode: the mouse steers the guns instead of selecting; `trigger` while LMB is held. */
+  private aim = false;
+  private trigger = false;
+  /** In-range structure under the reticle. */
+  private aimAt: number | null = null;
   private wrecks: Wreck[] = [];
   private shake = 0;
   /** 0 = pristine .. 3 = critical; picks the cratered hull sprites and how much it smokes. */
@@ -145,6 +163,8 @@ export class Engine {
       this.setPilot(true);
     }
     if (import.meta.env.DEV && q.has('hangar')) this.hud.set({ fittingOpen: true });
+    view.listeners.destroyed = (s) => this.explodeStructure(s);
+    this.cleanup.push(() => (view.listeners.destroyed = undefined));
     this.bindInput();
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -158,6 +178,7 @@ export class Engine {
 
   // ---------------------------------------------------------------- public API (UI)
   setBuildMode(kind: StructureKind | null) {
+    if (kind) this.setAim(false);
     this.buildMode = kind;
     this.hoverKey = '';
     this.hud.set({ buildMode: kind });
@@ -219,6 +240,8 @@ export class Engine {
     this.hull = HULL[h.active];
     const st = computeStats(h.active, h.fits[h.active]);
     this.flight = flightParams(st);
+    this.laser = weaponStats(h.active, h.fits[h.active], 'pulse-laser');
+    if (!this.laser.count) this.ceaseFire();
     this.flightDry = dryFlight(this.flight);
     this.vitals = this.vitals ? refitVitals(this.vitals, st) : fullVitals(st);
     this.syncDamage();
@@ -270,6 +293,11 @@ export class Engine {
     on(el, 'pointerdown', (e) => {
       local(e);
       el.setPointerCapture(e.pointerId);
+      if (this.aim && e.button === 0) {
+        this.trigger = true;
+        if (!this.laser.count) toast('Fit a Pulse Laser in the hangar (G)', 'bad');
+        return;
+      }
       this.drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, moved: false, button: e.button, lt: performance.now() };
       this.cam.vx = this.cam.vy = 0;
       this.cam.gx = NaN;
@@ -292,6 +320,7 @@ export class Engine {
       d.ly = e.clientY;
     });
     const up = (e: PointerEvent) => {
+      if (e.button === 0) this.trigger = false;
       const d = this.drag;
       if (!d || d.id !== e.pointerId) return;
       this.drag = null;
@@ -333,9 +362,11 @@ export class Engine {
         e.preventDefault();
         if (!e.repeat) this.setPilot(!this.pilot);
       } else if (k === 'f') this.focusShip();
+      else if (k === 'e' && !e.repeat) this.setAim(!this.aim);
       else if (k === 'x' && import.meta.env.DEV && !e.repeat) this.damageShip(this.vitals.maxHp * 0.25); // dev: test damage and death
       else if (k === 'escape') {
-        if (this.buildMode) this.setBuildMode(null);
+        if (this.aim) this.setAim(false);
+        else if (this.buildMode) this.setBuildMode(null);
         else if (this.pilot) this.setPilot(false);
         else this.select(null);
       } else if (k === 'f3') {
@@ -354,7 +385,10 @@ export class Engine {
       this.keys.delete(e.key.toLowerCase());
       this.mouse.shift = e.shiftKey;
     });
-    on(window, 'blur', () => this.keys.clear());
+    on(window, 'blur', () => {
+      this.keys.clear();
+      this.trigger = false;
+    });
   }
 
   private async click() {
@@ -395,7 +429,9 @@ export class Engine {
     const s = this.view.structure(col, row);
     const snap: TileSnap = {
       col, row, kind, variant: this.view.chunkAt(col, row)!.variant[localIndex(col, row)], owner: this.view.owner(col, row),
-      structure: s ? { kind: s.kind, progress: progressOf(s, this.view.now()), level: s.level, owner: s.owner, finishAt: s.finishAt } : null,
+      structure: s
+        ? { kind: s.kind, progress: progressOf(s, this.view.now()), level: s.level, owner: s.owner, finishAt: s.finishAt, hp: hpOf(s, this.view.now()), maxHp: STRUCT[s.kind].hp }
+        : null,
       known: this.view.known(col, row),
     };
     if (withBuild && this.buildMode) Object.assign(snap, this.view.canBuild(this.buildMode, col, row));
@@ -414,6 +450,7 @@ export class Engine {
       this.fpsAcc = this.fpsFrames = 0;
     }
     this.updateShip(dt);
+    this.updateFiring(dt);
     this.updateCamera(dt);
     this.shipSprites.warm(1.5);
     this.view.update(this.getView(), 3);
@@ -501,7 +538,7 @@ export class Engine {
           life, max: life, col: `rgb(${g},${g + 3},${g + 10})`, a: 0.7, solid: true, drag: 0.8, size: Math.random() < 0.5 ? 2 : 1,
         });
       }
-      if (Math.random() < dt * st * 0.8) this.sparks(x, y, 3 + Math.floor(Math.random() * 4));
+      if (Math.random() < dt * st * 0.8) this.sparks(x, y, 3 + Math.floor(Math.random() * 4), s.vx, s.vy);
       if (st === 3 && Math.random() < dt * 25) {
         const life = 0.2 + Math.random() * 0.25;
         this.parts.push({ x: x + r() * 2, y, vx: s.vx * 0.5 + r() * 6, vy: s.vy * 0.5 - 14, life, max: life, col: Math.random() < 0.3 ? '#ffd27a' : '#ff6a2a', a: 0.9 });
@@ -509,12 +546,11 @@ export class Engine {
     }
   }
 
-  private sparks(x: number, y: number, n: number) {
-    const s = this.ship;
+  private sparks(x: number, y: number, n: number, vx = 0, vy = 0) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 70, life = 0.15 + Math.random() * 0.25;
       this.parts.push({
-        x, y, vx: Math.cos(a) * sp + s.vx * 0.8, vy: Math.sin(a) * sp * PITCH_SIN - 15 + s.vy * 0.8,
+        x, y, vx: Math.cos(a) * sp + vx * 0.8, vy: Math.sin(a) * sp * PITCH_SIN - 15 + vy * 0.8,
         life, max: life, col: Math.random() < 0.5 ? '#ffffff' : '#ffd27a', drag: 4,
       });
     }
@@ -549,7 +585,7 @@ export class Engine {
     const h = hits.length ? hits[Math.floor(Math.random() * hits.length)] : ([0, 0, 0] as [number, number, number]);
     const [ox, oy] = projectPoint(h, modelYaw(s.heading), Math.round(-s.bank * BANK_LEVELS) * BANK_ANGLE);
     const x = s.x + ox, y = s.y - this.hull.alt + oy;
-    this.sparks(x, y, 18);
+    this.sparks(x, y, 18, s.vx, s.vy);
     this.booms.push({ x, y, t: 0, size: 0.35 });
     this.shake = Math.max(this.shake, 2);
   }
@@ -592,22 +628,240 @@ export class Engine {
         life, max: life, col: css(d.col), solid: !d.glow, drag: 1, size: Math.random() < 0.3 ? 2 : 1,
       });
     }
-    // Fireball: a fast hot shell and a slower, longer-burning core.
-    for (let i = 0; i < 180; i++) {
-      const core = i % 3 === 0, a = Math.random() * Math.PI * 2, sp = core ? 15 + Math.random() * 40 : 60 + Math.random() * 150;
+    this.blast(s.x, oy, s.y, 1.4, s.vx, s.vy);
+    this.depot = null;
+    this.ceaseFire();
+    this.wreck = 3;
+    this.shipTarget = null;
+    s.vx = s.vy = s.turn = s.thrust = 0;
+  }
+
+  /** Fireball, flash, shockwave on the ground at `gy`, and camera shake if it's on screen. */
+  private blast(x: number, y: number, gy: number, size: number, vx = 0, vy = 0) {
+    const r = () => Math.random() - 0.5;
+    // A fast hot shell and a slower, longer-burning core.
+    for (let i = 0; i < 130 * size; i++) {
+      const core = i % 3 === 0, a = Math.random() * Math.PI * 2, sp = (core ? 15 + Math.random() * 40 : 60 + Math.random() * 150) * Math.sqrt(size);
       const life = core ? 0.6 + Math.random() * 0.6 : 0.25 + Math.random() * 0.5;
       this.parts.push({
-        x: s.x + r() * 6, y: oy + r() * 4, vx: Math.cos(a) * sp + s.vx * 0.6, vy: Math.sin(a) * sp * PITCH_SIN + s.vy * 0.6 - (core ? 10 : 0),
+        x: x + r() * 6 * size, y: y + r() * 4 * size, vx: Math.cos(a) * sp + vx * 0.6, vy: Math.sin(a) * sp * PITCH_SIN + vy * 0.6 - (core ? 10 : 0),
         life, max: life, col: core ? (Math.random() < 0.5 ? '#ff6a2a' : '#ffd27a') : Math.random() < 0.35 ? '#ffffff' : '#ffa64a',
         drag: core ? 2 : 3, size: core ? 2 : 1,
       });
     }
-    this.booms.push({ x: s.x, y: oy, t: 0, size: 1.4, ring: true });
-    this.shake = 8;
-    this.depot = null;
-    this.wreck = 3;
-    this.shipTarget = null;
-    s.vx = s.vy = s.turn = s.thrust = 0;
+    this.booms.push({ x, y, t: 0, size, ring: true, gy });
+    const v = this.getView();
+    if (x > v.x && x < v.x + v.w && y > v.y && y < v.y + v.h) this.shake = Math.max(this.shake, 6 * size);
+  }
+
+  /** A structure destroyed by fire: its sprite fractures into chunks that tumble and land like hull wreckage. */
+  private explodeStructure(s: Structure) {
+    if (this.cam.zoom < 1) return;
+    const spr = assets.structure(s.kind, s.owner), r = () => Math.random() - 0.5;
+    const x0 = tileX(s.col, s.row) + SOX, y0 = tileY(s.row) + SOY, cx = tileX(s.col, s.row) + CX, gy = tileY(s.row) + CY;
+    const size = s.kind === 'nexus' ? 1.8 : 1.1;
+    const { pieces, pixels } = fractureSprite(spr, s.kind === 'nexus' ? 11 : 7, Math.floor(Math.random() * 1e9));
+    for (const p of pieces) {
+      const px = x0 + p.x, py = y0 + p.y, y = gy + r() * 8, sp = (20 + Math.random() * 40) * size;
+      const life = 5 + Math.random() * 2;
+      this.wrecks.push({
+        flat: p, x: px, y, z: y - py,
+        vx: ((px - cx) / 12 + r()) * sp, vy: r() * sp * 0.8, vz: 20 + Math.random() * 40 + (gy - py) * 0.6,
+        yaw: 0, roll: 0, spin: r() * 6, tumble: 0, life, max: life, landed: false,
+        pop: Math.random() < 0.4 ? 0.3 + Math.random() * 1.4 : 0,
+      });
+    }
+    for (const d of pixels) {
+      const px = x0 + d.x, py = y0 + d.y, dx = px - cx, dy = py - (gy - 14), l = Math.hypot(dx, dy) || 1;
+      const sp = (30 + Math.random() * 80) * size, life = 1.5 + Math.random() * 2;
+      this.parts.push({
+        x: px, y: py, vx: (dx / l) * sp + r() * 20, vy: (dy / l) * sp * PITCH_SIN - 20 + r() * 20,
+        life, max: life, col: css(d.col), solid: !d.glow, drag: 1, size: Math.random() < 0.3 ? 2 : 1,
+      });
+    }
+    this.blast(cx, gy - 14, gy, size);
+  }
+
+  // ---------------------------------------------------------------- weapons
+  /** E: switch the mouse between selecting/placing and aiming the ship's weapons. */
+  setAim(on: boolean) {
+    if (on === this.aim) return;
+    this.aim = on;
+    this.trigger = false;
+    if (on) this.setBuildMode(null);
+    else this.ceaseFire();
+    this.glc.classList.toggle('aim', on);
+    this.hud.set({ aim: on });
+  }
+
+  /**
+   * The structure whose sprite is under a world point. Sprites stand up out of
+   * their tile, so the tile beneath the cursor isn't enough: check the rows
+   * just below too, front (nearest the camera) first.
+   */
+  private structureAt(wx: number, wy: number): Structure | null {
+    const r0 = Math.floor(wy / RH);
+    for (let r = r0 + 3; r >= r0 - 1; r--) {
+      const c0 = Math.floor((wx - (r & 1) * 16) / TW);
+      for (let c = c0 - 1; c <= c0 + 1; c++) {
+        const s = this.view.structure(c, r);
+        if (!s) continue;
+        const x = tileX(c, r), y = tileY(r);
+        if (wx >= x && wx < x + TW && wy >= y - 32 && wy < y + CY + 4) return s;
+      }
+    }
+    return null;
+  }
+
+  private ceaseFire() {
+    if (this.target === null) return;
+    this.target = null;
+    void this.view.fire(null);
+  }
+
+  /** Ground distance from the ship to a structure: the same measure the shard checks. */
+  private rangeTo(s: Structure) {
+    return Math.hypot(tileX(s.col, s.row) + CX - this.ship.x, tileY(s.row) + CY - this.ship.y);
+  }
+
+  /**
+   * Hold the trigger and the lasers fire toward the cursor. Bolts stop on a
+   * structure under the cursor (if it's in range) and fly on to full range
+   * otherwise, which is also how they'll meet enemy ships once there are any.
+   * The shard only hears about it when the target under the cursor changes.
+   */
+  private updateFiring(dt: number) {
+    const m = this.mouseWorld();
+    const hovered = this.aim && this.mouse.inside ? this.structureAt(m.x, m.y) : null;
+    this.aimAt = hovered && this.rangeTo(hovered) <= this.laser.range ? hovered.id : null;
+    const live = this.aim && this.trigger && this.laser.count > 0 && !this.wreck;
+    const want = live ? this.aimAt : null;
+    if (want !== this.target) {
+      if (want === null) this.ceaseFire();
+      else void this.openFire(want);
+    }
+    if (live) {
+      // Each laser cycles about twice a second; shots alternate between muzzles.
+      this.shotAcc += dt * this.laser.count * 2.2;
+      for (; this.shotAcc >= 1; this.shotAcc--) this.shoot(m.x, m.y, want !== null);
+    } else this.shotAcc = 0.99; // first shot leaves the moment the trigger is pulled
+    for (const b of this.bolts) {
+      b.t += dt;
+      if (b.t >= b.dur && b.hit) {
+        this.sparks(b.x1, b.y1, 5);
+        this.booms.push({ x: b.x1, y: b.y1, t: 0.6, size: 0.25 });
+      }
+    }
+    this.bolts = this.bolts.filter((b) => b.t < b.dur);
+  }
+
+  private async openFire(id: number) {
+    this.target = id;
+    const h = hangar.get();
+    // An intent, not a damage number: the shard works out the damage from the fit itself.
+    const r = await this.view.fire({ target: id, x: this.ship.x, y: this.ship.y, hull: h.active, fit: h.fits[h.active] });
+    if (!r.ok && this.target === id) {
+      this.target = null;
+      toast(r.reason!, 'bad');
+    }
+  }
+
+  private shoot(tx: number, ty: number, hit: boolean) {
+    const sh = this.ship, m = this.shipSprites.model, r = () => Math.random() - 0.5;
+    const yaw = modelYaw(sh.heading), roll = Math.round(-sh.bank * BANK_LEVELS) * BANK_ANGLE;
+    this.muzzle = -this.muzzle;
+    const [ox, oy] = projectPoint([m.sx * 0.3, this.muzzle * m.sy * 0.12, 0], yaw, roll);
+    const x0 = sh.x + ox, y0 = sh.y - this.hull.alt + oy;
+    let x1 = tx + r() * 4, y1 = ty + r() * 4;
+    if (!hit) {
+      // A miss carries on past the cursor and burns out at full range.
+      const d = Math.hypot(x1 - x0, y1 - y0) || 1;
+      x1 = x0 + ((x1 - x0) / d) * this.laser.range;
+      y1 = y0 + ((y1 - y0) / d) * this.laser.range;
+    }
+    const col = FACTIONS[this.view.meta!.player].color;
+    this.bolts.push({ x0, y0, x1, y1, t: 0, dur: Math.hypot(x1 - x0, y1 - y0) / 650, col, hit });
+    for (let i = 0; i < 3; i++) this.parts.push({ x: x0, y: y0, vx: sh.vx + r() * 30, vy: sh.vy + r() * 30, life: 0.12, max: 0.12, col: '#ffffff' });
+  }
+
+  /** Aim mode: a reticle at the cursor and the weapon's reach around the ship. */
+  private drawReticle(e: CanvasRenderingContext2D, t: number) {
+    if (!this.aim || !this.mouse.inside || this.wreck) return;
+    const s = this.ship, me = FACTIONS[this.view.meta!.player].color, R = this.laser.range;
+    if (R) {
+      e.globalAlpha = 0.18;
+      e.strokeStyle = me;
+      e.lineWidth = 1;
+      e.beginPath();
+      e.ellipse(Math.round(s.x) + 0.5, Math.round(s.y) + 0.5, R, R * PITCH_SIN, 0, 0, Math.PI * 2);
+      e.stroke();
+    }
+    const m = this.mouseWorld(), x = Math.round(m.x), y = Math.round(m.y);
+    const inRange = Math.hypot(m.x - s.x, m.y - s.y + this.hull.alt) <= R;
+    e.globalAlpha = 0.9;
+    e.fillStyle = this.aimAt !== null ? '#ff5a70' : inRange ? '#ffffff' : '#7d8eab';
+    const g = this.trigger ? 2 : 3 + Math.round(Math.sin(t * 6) * 0.6);
+    e.fillRect(x - g - 3, y, 4, 1);
+    e.fillRect(x + g, y, 4, 1);
+    e.fillRect(x, y - g - 3, 1, 4);
+    e.fillRect(x, y + g, 1, 4);
+    e.fillRect(x, y, 1, 1);
+    e.globalAlpha = 1;
+  }
+
+  private drawBolts(e: CanvasRenderingContext2D, l: CanvasRenderingContext2D) {
+    for (const b of this.bolts) {
+      const u = b.t / b.dur, dx = b.x1 - b.x0, dy = b.y1 - b.y0, len = Math.hypot(dx, dy) || 1;
+      const hx = b.x0 + dx * u, hy = b.y0 + dy * u;
+      // A short streak: white-hot head, faction-coloured tail. Misses fade out at the end of their range.
+      const fade = b.hit ? 1 : Math.min(1, (1 - u) * 4);
+      for (let k = 0; k < 9; k++) {
+        const px = Math.round(hx - (dx / len) * k), py = Math.round(hy - (dy / len) * k);
+        e.globalAlpha = (1 - k / 10) * fade;
+        e.fillStyle = k < 2 ? '#ffffff' : b.col;
+        e.fillRect(px, py, 1, 1);
+      }
+      l.globalAlpha = 0.5;
+      l.drawImage(assets.light(b.col), hx - 10, hy - 10, 20, 20);
+    }
+    e.globalAlpha = l.globalAlpha = 1;
+  }
+
+  /** Damaged structures smoke, spark while under fire and burn when nearly gone; plus a health bar and target brackets. */
+  private drawStructureDamage(s: Structure, x: number, y: number, t: number, now: number, dt: number) {
+    const hp = hpOf(s, now) / STRUCT[s.kind].hp, targeted = s.id === this.target || s.id === this.aimAt;
+    if (hp >= 1 && !targeted) return;
+    const c = this.col.ctx, e = this.emit.ctx, r = () => Math.random() - 0.5;
+    const cx = x + CX, gy = y + CY, spot = () => [cx + r() * 16, gy - 8 - Math.random() * 22] as const;
+    if (this.parts.length < 900) {
+      if (hp < 0.6 && Math.random() < dt * (hp < 0.3 ? 12 : 5)) {
+        const [px, py] = spot(), life = 1.2 + Math.random(), g = 40 + Math.floor(Math.random() * 30);
+        this.parts.push({ x: px, y: py, vx: r() * 5, vy: -7 - Math.random() * 6, life, max: life, col: `rgb(${g},${g + 3},${g + 10})`, a: 0.7, solid: true, drag: 0.6, size: 2 });
+      }
+      if (hp < 0.3 && Math.random() < dt * 20) {
+        const [px, py] = spot(), life = 0.25 + Math.random() * 0.25;
+        this.parts.push({ x: px, y: py, vx: r() * 6, vy: -14, life, max: life, col: Math.random() < 0.3 ? '#ffd27a' : '#ff6a2a', a: 0.9 });
+      }
+      if (s.drain > 0 && Math.random() < dt * 3) this.sparks(...spot(), 4);
+    }
+    if (hp < 1) {
+      const bx = Math.round(cx - 10), by = Math.round(gy + 6), w = Math.round(20 * hp);
+      c.fillStyle = '#04050a';
+      c.fillRect(bx - 1, by - 1, 22, 4);
+      e.fillStyle = hp > 0.6 ? '#5cff9d' : hp > 0.3 ? '#ffc35c' : '#ff5a70';
+      e.globalAlpha = 0.9;
+      e.fillRect(bx, by, w, 2);
+      e.globalAlpha = 1;
+    }
+    if (targeted) {
+      // Pulsing lock brackets around the target.
+      const p = 2 + Math.round(Math.sin(t * 8)), x0 = Math.round(cx - 18 - p), x1 = Math.round(cx + 18 + p), y0 = Math.round(gy - 40 - p), y1 = Math.round(gy + 8 + p);
+      e.fillStyle = '#ff5a70';
+      for (const [ax, ay, sx, sy] of [[x0, y0, 1, 1], [x1, y0, -1, 1], [x0, y1, 1, -1], [x1, y1, -1, -1]]) {
+        e.fillRect(Math.min(ax, ax + sx * 4), ay, 5, 1);
+        e.fillRect(ax, Math.min(ay, ay + sy * 4), 1, 5);
+      }
+    }
   }
 
   private solidUnder(x: number, y: number) {
@@ -665,8 +919,16 @@ export class Engine {
 
   private drawWrecks(c: CanvasRenderingContext2D, e: CanvasRenderingContext2D) {
     for (const w of this.wrecks) {
-      const f = w.spr.pose(w.yaw, w.roll), half = w.spr.size / 2;
-      const gx = Math.round(w.x), sx = gx - half, sy = Math.round(w.y - w.z) - half;
+      const f = w.flat ?? w.spr!.pose(w.yaw, w.roll), half = w.flat ? Math.max(w.flat.w, w.flat.h) / 2 : w.spr!.size / 2;
+      const gx = Math.round(w.x), cy = Math.round(w.y - w.z), sx = gx - half, sy = cy - half;
+      const draw = (g: CanvasRenderingContext2D, img: HTMLCanvasElement) => {
+        if (!w.flat) return g.drawImage(img, sx, sy);
+        g.save();
+        g.translate(gx, cy);
+        g.rotate(w.yaw);
+        g.drawImage(img, -Math.round(w.flat.w / 2), -Math.round(w.flat.h / 2));
+        g.restore();
+      };
       // Fade out at end of life, and as it falls away into the void.
       const a = Math.min(1, w.life / 1.2) * Math.min(1, 1 + w.z / 100);
       if (w.z > 0 && this.solidUnder(w.x, w.y)) {
@@ -677,13 +939,13 @@ export class Engine {
         c.fill();
       }
       c.globalAlpha = e.globalAlpha = a;
-      c.drawImage(f.color, sx, sy);
-      e.drawImage(f.emit, sx, sy);
+      draw(c, f.color);
+      draw(e, f.emit);
       // Fresh breaks glow hot and cool over the first seconds.
       const heat = Math.max(0, 1 - (w.max - w.life) / 1.5);
       if (heat) {
         e.globalAlpha = heat * 0.6 * a;
-        e.drawImage(f.color, sx, sy);
+        draw(e, f.color);
       }
     }
     c.globalAlpha = e.globalAlpha = 1;
@@ -747,7 +1009,7 @@ export class Engine {
     const { cam, mouse } = this;
     const wx = cam.x + (mouse.x - this.host.clientWidth / 2) / cam.zoom;
     const wy = cam.y + (mouse.y - this.host.clientHeight / 2) / cam.zoom;
-    const p = mouse.inside && !this.drag?.moved ? pick(wx, wy) : null;
+    const p = mouse.inside && !this.drag?.moved && !this.aim ? pick(wx, wy) : null;
     const k = p && this.view.kind(p[0], p[1]);
     this.hover = k && k !== 'void' ? p : null;
     const key = this.hover ? `${this.hover}|${this.buildMode}|${this.view.chunkAt(...this.hover)!.version}` : '';
@@ -765,7 +1027,7 @@ export class Engine {
       zoom: this.cam.tz,
       selected: this.selected ? this.snap(this.selected[0], this.selected[1], false) : null,
       hover: this.hover ? this.snap(this.hover[0], this.hover[1], true) : null,
-      ship: { ...this.vitals, refuelling: !!this.depot, wrecked: this.wreck > 0 },
+      ship: { ...this.vitals, refuelling: !!this.depot, wrecked: this.wreck > 0, firing: this.target !== null },
     });
   }
 
@@ -929,7 +1191,9 @@ export class Engine {
       this.drawWrecks(c, e);
     }
     if (zoom > MAP_FADE[1] && !this.wreck) this.drawFlagship(t);
-    for (const { x, y, t: bt, size, ring } of this.booms) {
+    if (zoom >= 1) this.drawBolts(e, l);
+    this.drawReticle(e, t);
+    for (const { x, y, t: bt, size, ring, gy } of this.booms) {
       // Flash that lights the surrounding plates, fading fast.
       const R = (40 + bt * 60) * size;
       l.globalAlpha = Math.max(0, 1 - bt) ** 2 * Math.min(1, size * 2);
@@ -941,7 +1205,7 @@ export class Engine {
         e.strokeStyle = '#ffd27a';
         e.lineWidth = 1;
         e.beginPath();
-        e.ellipse(Math.round(x) + 0.5, Math.round(y + this.hull.alt) + 0.5, rr, rr * PITCH_SIN, 0, 0, Math.PI * 2);
+        e.ellipse(Math.round(x) + 0.5, Math.round(gy ?? y) + 0.5, rr, rr * PITCH_SIN, 0, 0, Math.PI * 2);
         e.stroke();
         e.globalAlpha = 1;
       }
@@ -1008,7 +1272,9 @@ export class Engine {
       for (let col = c0; col <= c1; col++) {
         const ch = chunkFor(col, r);
         const s = ch?.structures.get(localIndex(col, r));
-        if (s) this.drawStructure(s, tileX(col, r), tileY(r), t, now);
+        if (!s) continue;
+        this.drawStructure(s, tileX(col, r), tileY(r), t, now);
+        this.drawStructureDamage(s, tileX(col, r), tileY(r), t, now, dt);
       }
     }
   }
