@@ -451,7 +451,7 @@ export interface SpritePixel { x: number; y: number; col: RGB; glow: boolean }
  * edges with embers, and sample loose pixels for debris. x/y are sprite-space
  * centres, so every piece starts exactly where it was drawn.
  */
-export function fractureSprite(src: { color: HTMLCanvasElement; emit: HTMLCanvasElement }, n: number, seed: number, loose = 260) {
+export function fractureSprite(src: { color: HTMLCanvasElement; emit: HTMLCanvasElement }, n: number, seed: number, loose = 260, weld = false) {
   const W = src.color.width, H = src.color.height;
   const read = (cv: HTMLCanvasElement) => cv.getContext('2d')!.getImageData(0, 0, W, H).data;
   const cd = read(src.color), ed = read(src.emit), rnd = mulberry32(seed);
@@ -483,8 +483,9 @@ export function fractureSprite(src: { color: HTMLCanvasElement; emit: HTMLCanvas
       if (owner[i] !== q) continue;
       const x = i % W, y = Math.floor(i / W);
       if (other(x - 1, y) || other(x + 1, y) || other(x, y - 1) || other(x, y + 1)) {
-        // Broken edge: charred, with the odd ember.
-        if (hash2(x, y, 11) < 0.3) { c.set(x - x0, y - y0, mix(C_AMBER, C_WHITE, 0.2)); e.set(x - x0, y - y0, C_AMBER, 170); }
+        // Broken edge: charred, with the odd ember. Weld mode (construction) keeps the metal and glows the seam instead.
+        if (weld) { c.set(x - x0, y - y0, rgb(cd, i)); e.set(x - x0, y - y0, C_AMBER, 110); }
+        else if (hash2(x, y, 11) < 0.3) { c.set(x - x0, y - y0, mix(C_AMBER, C_WHITE, 0.2)); e.set(x - x0, y - y0, C_AMBER, 170); }
         else c.set(x - x0, y - y0, STEEL[1]);
       } else {
         c.set(x - x0, y - y0, rgb(cd, i));

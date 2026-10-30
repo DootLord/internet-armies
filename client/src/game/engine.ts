@@ -8,7 +8,7 @@ import { Chunk, CHUNK_PX_H, CHUNK_PX_W, CS_BITS, localIndex, pack } from './chun
 import { KINDS, VOID } from './terrain';
 import { hpOf, progressOf, ShipReport, Structure } from './protocol';
 import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
-import { hash2, smoothstep } from './rng';
+import { clamp, hash2, smoothstep } from './rng';
 import type { WorldView } from './WorldView';
 import { computeStats, flightParams, weaponStats } from './ships/fitting';
 import { hangar } from './ships/hangar';
@@ -111,6 +111,11 @@ export class Engine {
   /** Seconds until the flagship reappears after exploding, and the fireball's light. */
   private wreck = 0;
   private booms: Boom[] = [];
+  /** Assembly pieces and weld times for structures under construction, by id. */
+  private builds = new Map<number, { pieces: SpriteShard[]; land: number[] }>();
+  /** Server time on the previous drawn frame, so one-off build events (welds, completion) fire exactly once. */
+  private lastNow = NaN;
+  private prevNow = NaN;
   /** Structure id we're firing on, the fitted pulse lasers, and bolts in flight. */
   private target: number | null = null;
   private laser = { count: 0, dps: 0, range: 0 };
@@ -1242,6 +1247,9 @@ export class Engine {
   private drawTiles(ox: number, oy: number, wx1: number, wy1: number, t: number, dt: number) {
     const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
     const view = this.view, now = view.now();
+    // After a gap (zoomed out, tab hidden) skip the missed events rather than firing them all at once.
+    this.prevNow = Number.isNaN(this.lastNow) || now - this.lastNow > 0.5 ? now : this.lastNow;
+    this.lastNow = now;
     const r0 = Math.floor((oy - 24) / RH), r1 = Math.floor((wy1 + 48) / RH);
     const c0 = Math.floor((ox - 48) / TW), c1 = Math.floor((wx1 + 16) / TW);
     const pulse = 0.78 + 0.22 * Math.sin(t * 2.2);
@@ -1299,6 +1307,118 @@ export class Engine {
         this.drawStructure(s, tileX(col, r), tileY(r), t, now);
         this.drawStructureDamage(s, tileX(col, r), tileY(r), t, now, dt);
       }
+    }
+  }
+
+  /**
+   * Construction is the explosion run backwards: the finished sprite, fractured
+   * the same way, flies in piece by piece from the ground up and welds into
+   * place under a drone's tractor beam. Everything is a function of the
+   * server-clock build window, so anyone arriving mid-build sees the same frame.
+   */
+  private drawConstruction(s: Structure, x: number, y: number, t: number, now: number) {
+    const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
+    const spr = assets.structure(s.kind, s.owner), col = FACTIONS[s.owner].color;
+    const sx = x + SOX, sy = y + SOY, D = s.finishAt - s.startedAt;
+    let b = this.builds.get(s.id);
+    if (!b) {
+      if (this.builds.size > 150) this.builds.clear(); // forget builds we never saw finish
+      const { pieces } = fractureSprite(spr, s.kind === 'nexus' ? 12 : 9, s.id * 7919 + 1, 0, true);
+      // Foundations first: order by each piece's lowest row.
+      pieces.sort((p, q) => q.y + q.h / 2 - (p.y + p.h / 2));
+      const land = pieces.map((_, i) => s.startedAt + D * (0.1 + (0.82 * (i + 1)) / pieces.length));
+      this.builds.set(s.id, (b = { pieces, land }));
+    }
+    const fly = Math.min(0.9, ((D * 0.82) / b.pieces.length) * 0.9);
+    const r = (i: number, k: number) => hash2(s.id, i, k) - 0.5;
+
+    // Blueprint: the whole building as a faint hologram for the pieces to fill in.
+    e.globalAlpha = 0.2 + 0.06 * Math.sin(t * 5 + s.id);
+    e.drawImage(spr.holo, sx, sy);
+    e.globalAlpha = 1;
+
+    let next = -1, carry: [number, number] | null = null;
+    for (let i = 0; i < b.pieces.length; i++) {
+      const p = b.pieces[i], tl = b.land[i], u = (now - (tl - fly)) / fly;
+      const fx = sx + p.x, fy = sy + p.y;
+      if (u <= 0) {
+        if (next < 0) next = i;
+        continue;
+      }
+      let px = fx, py = fy, rot = 0;
+      if (u < 1) {
+        if (next < 0) next = i;
+        // Swoops in from above, spinning, and eases into its slot.
+        const k = 1 - (1 - u) ** 3;
+        px += r(i, 1) * 50 * (1 - k);
+        py -= (50 + r(i, 2) * 30) * (1 - k);
+        rot = r(i, 3) * 3 * (1 - k);
+        carry = [px, py];
+      }
+      if (this.prevNow < tl && now >= tl) {
+        this.sparks(fx, fy, 7);
+        this.booms.push({ x: fx, y: fy, t: 0.55, size: 0.2 });
+      }
+      const draw = (g: CanvasRenderingContext2D, img: HTMLCanvasElement) => {
+        if (!rot) return g.drawImage(img, Math.round(px - p.w / 2), Math.round(py - p.h / 2));
+        g.save();
+        g.translate(Math.round(px), Math.round(py));
+        g.rotate(rot);
+        g.drawImage(img, -Math.round(p.w / 2), -Math.round(p.h / 2));
+        g.restore();
+      };
+      draw(c, p.color);
+      draw(e, p.emit);
+      // Fresh welds glow and cool.
+      const heat = u < 1 ? 1 : Math.max(0, 1 - (now - tl) / 0.8);
+      if (heat) {
+        e.globalAlpha = heat * 0.6;
+        draw(e, p.color);
+        e.globalAlpha = 1;
+      }
+    }
+
+    // Construction drone: glides to each slot in turn and tows the next piece in.
+    const last = b.pieces.length - 1, ni = next < 0 ? last : next, pi = Math.max(0, ni - 1);
+    const t0 = ni > 0 ? b.land[ni - 1] : s.startedAt, t1 = next < 0 ? s.finishAt : b.land[ni];
+    const k = smoothstep(0, 1, clamp(((now - t0) / Math.max(0.01, t1 - t0)) * 2, 0, 1));
+    const dx = Math.round(sx + b.pieces[pi].x + (b.pieces[ni].x - b.pieces[pi].x) * k);
+    const dy = Math.round(sy + b.pieces[pi].y + (b.pieces[ni].y - b.pieces[pi].y) * k - 24 + Math.sin(t * 3 + s.id) * 1.5);
+    if (carry) {
+      const [cx, cy] = carry, len = Math.hypot(cx - dx, cy - dy);
+      e.fillStyle = col;
+      for (let d = (t * 30) % 3; d < len; d += 3) {
+        e.globalAlpha = 0.55;
+        e.fillRect(Math.round(dx + ((cx - dx) * d) / len), Math.round(dy + 2 + ((cy - dy - 2) * d) / len), 1, 1);
+      }
+      e.globalAlpha = 1;
+    }
+    c.fillStyle = '#435270';
+    c.fillRect(dx - 2, dy, 5, 2);
+    c.fillStyle = '#8698b4';
+    c.fillRect(dx - 1, dy - 1, 3, 1);
+    e.fillStyle = col;
+    e.fillRect(dx - 3, dy + 1, 1, 1);
+    e.fillRect(dx + 3, dy + 1, 1, 1);
+    e.fillStyle = '#ffffff';
+    e.fillRect(dx, dy + 2, 1, 1);
+
+    l.globalAlpha = 0.4;
+    l.drawImage(assets.light(col), x + CX - 28, y + CY - 34, 56, 56);
+    l.globalAlpha = 0.3;
+    l.drawImage(assets.light(col), dx - 10, dy - 8, 20, 20);
+    l.globalAlpha = 1;
+  }
+
+  /** The last weld: a flash, a shockwave across the deck, sparks off the top and dust kicked out at the base. */
+  private completeBuild(s: Structure, x: number, y: number) {
+    if (s.finishAt <= s.startedAt) return;
+    const cx = x + CX, gy = y + CY, r = () => Math.random() - 0.5;
+    this.booms.push({ x: cx, y: gy - 14, t: 0.2, size: 0.6, ring: true, gy });
+    this.sparks(cx, gy - 24, 20);
+    for (let i = 0; i < 18; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 20 + Math.random() * 25, life = 0.8 + Math.random() * 0.6, g = 60 + Math.floor(Math.random() * 30);
+      this.parts.push({ x: cx + r() * 10, y: gy + r() * 4, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * PITCH_SIN - 4, life, max: life, col: `rgb(${g},${g + 4},${g + 12})`, a: 0.6, solid: true, drag: 2, size: 2 });
     }
   }
 
@@ -1366,20 +1486,14 @@ export class Engine {
     const seed = tileSeed(s.col, s.row);
     const progress = progressOf(s, now);
 
-    if (progress < 1) {
-      // Hologram fabrication: solid from the ground up, scanning beam at the build line.
-      const cut = Math.round(60 * (1 - progress));
-      if (cut < 60) c.drawImage(spr.color, 0, cut, 40, 60 - cut, sx, sy + cut, 40, 60 - cut);
-      e.globalAlpha = 0.45 + 0.15 * Math.sin(t * 9 + seed * 10);
-      if (cut > 0) e.drawImage(spr.holo, 0, 0, 40, cut, sx, sy, 40, cut);
-      e.globalAlpha = 0.9;
-      e.fillStyle = f.color;
-      e.fillRect(sx + 4, sy + cut, 32, 1);
+    if (progress < 1) return this.drawConstruction(s, x, y, t, now);
+    if (this.builds.delete(s.id) && now - s.finishAt < 1.2) this.completeBuild(s, x, y);
+    // Power-up: the fresh building glows white-hot and settles over a second.
+    const since = now - s.finishAt;
+    if (s.finishAt > s.startedAt && since >= 0 && since < 1.2) {
+      e.globalAlpha = (1 - since / 1.2) ** 2 * 0.9;
+      e.drawImage(spr.color, sx, sy);
       e.globalAlpha = 1;
-      l.globalAlpha = 0.4;
-      l.drawImage(assets.light(f.color), x + CX - 28, y + CY - 34, 56, 56);
-      l.globalAlpha = 1;
-      return;
     }
 
     c.drawImage(spr.color, sx, sy);
