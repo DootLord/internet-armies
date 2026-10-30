@@ -63,7 +63,7 @@ export interface Faction {
 }
 const f = (id: number, name: string, tag: string, color: string): Faction => ({ id, name, tag, color, rgb: hex(color) });
 export const FACTIONS: Faction[] = [
-  f(0, 'Halcyon Directorate', 'HLC', '#49e0ff'),
+  f(0, 'DootLord Inc', 'HLC', '#49e0ff'),
   f(1, 'Vanguard Syndicate', 'VGS', '#ffb547'),
   f(2, 'Crimson Accord', 'CRA', '#ff4f6a'),
   f(3, 'Verdant Collective', 'VDC', '#5cff9d'),
