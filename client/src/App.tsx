@@ -9,6 +9,7 @@ import { Minimap } from './ui/Minimap';
 import { AimBanner, BuildBanner, PilotBanner, Toasts, Tooltip } from './ui/Overlays';
 import { SelectionPanel } from './ui/SelectionPanel';
 import { ShipStatus } from './ui/ShipStatus';
+import { StorageWindow } from './ui/StorageWindow';
 import { installSkin } from './ui/skin';
 import { TopBar } from './ui/TopBar';
 
@@ -59,6 +60,7 @@ export function App() {
           <BuildDock />
           <DebugPanel />
           <Tooltip />
+          <StorageWindow />
           <Fitting />
         </div>
       )}

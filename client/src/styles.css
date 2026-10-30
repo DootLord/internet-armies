@@ -324,6 +324,7 @@ kbd {
 .budget-fill.hot { background: linear-gradient(180deg, #ffd36b, #c7802a); box-shadow: 0 0 8px rgba(255, 195, 92, 0.6); }
 .budget-fill.hp { background: linear-gradient(180deg, #8dffbc, #2a9c5c); box-shadow: 0 0 8px rgba(92, 255, 157, 0.5); }
 .budget-fill.fuel { background: linear-gradient(180deg, #ffc47a, #c0661f); box-shadow: 0 0 8px rgba(255, 166, 74, 0.5); }
+.budget-fill.cargo { background: linear-gradient(180deg, #d9e3f0, #6d7f9c); box-shadow: 0 0 8px rgba(184, 200, 220, 0.4); }
 .budget-fill.low { background: linear-gradient(180deg, #ff8a9a, #b02a3e); box-shadow: 0 0 8px rgba(255, 90, 112, 0.6); }
 
 /* ------------------------------------------------------------ flagship status */
@@ -349,7 +350,43 @@ kbd {
 .mod-info { display: flex; flex-direction: column; gap: 3px; padding: calc(2 * var(--u)); font-size: 16px; min-height: 104px; margin-top: auto; }
 .mod-info .bad { color: var(--bad); }
 
-.fit-stats { display: grid; grid-template-columns: repeat(9, 1fr); gap: calc(2 * var(--u)); padding-top: calc(3 * var(--u)); border-top: var(--u) solid #161d2b; }
+/* ------------------------------------------------------------ cargo hold */
+.cargo { --cell: calc(15 * var(--u)); display: flex; flex-direction: column; gap: calc(2 * var(--u)); flex: 1; min-height: 0; }
+.cargo-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 17px; }
+.cargo-head .num { font-size: 12px; }
+.cargo-scroll { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.cargo-grid { display: inline-block; line-height: 0; }
+.cargo-cells {
+  position: relative;
+  background-color: #05070d;
+  background-image: linear-gradient(90deg, rgba(93, 111, 142, 0.22) 1px, transparent 1px), linear-gradient(rgba(93, 111, 142, 0.22) 1px, transparent 1px);
+  background-size: var(--cell) var(--cell);
+}
+.cargo-item { position: absolute; cursor: grab; touch-action: none; background: rgba(184, 200, 220, 0.05); box-shadow: inset 0 0 0 1px rgba(184, 200, 220, 0.22); }
+.cargo-item:hover { background: rgba(73, 224, 255, 0.08); box-shadow: inset 0 0 0 1px var(--acc); }
+.cargo-item.lifted { opacity: 0.25; }
+.cargo-item img { position: absolute; left: 50%; top: 50%; image-rendering: pixelated; pointer-events: none; transform: translate(-50%, -50%) rotate(var(--r, 0deg)); filter: drop-shadow(0 0 3px rgba(255, 162, 69, 0.45)); }
+.cargo-ghost { position: absolute; pointer-events: none; background: rgba(92, 255, 157, 0.14); box-shadow: inset 0 0 0 1px var(--good); }
+.cargo-ghost.bad { background: rgba(255, 90, 112, 0.14); box-shadow: inset 0 0 0 1px var(--bad); }
+.cargo-float { position: fixed; z-index: 100; pointer-events: none; }
+.cargo-float .cargo-item { position: relative; cursor: grabbing; box-shadow: inset 0 0 0 1px var(--acc); }
+.cargo-overflow { display: flex; flex-direction: column; gap: var(--u); font-size: 15px; }
+.cargo-tray { display: flex; flex-wrap: wrap; gap: var(--u); }
+.cargo-tray .cargo-item { position: relative; }
+.cargo-bays { display: flex; gap: calc(4 * var(--u)); align-items: flex-start; min-height: 0; }
+.cargo-bay { display: flex; flex-direction: column; gap: var(--u); min-height: 0; }
+.cargo-grid.locked .cargo-item { cursor: not-allowed; }
+.cargo-lock { position: absolute; inset: 0; display: grid; place-items: center; padding: calc(4 * var(--u)); text-align: center; line-height: 1.1; font-size: 16px; color: var(--warn); background: rgba(4, 5, 10, 0.6); pointer-events: none; }
+.storage-win { position: absolute; right: calc(6 * var(--u)); top: calc(40 * var(--u)); display: flex; flex-direction: column; gap: calc(2 * var(--u)); max-width: calc(100vw - 12 * var(--u)); }
+.storage-win .cargo { --cell: calc(11 * var(--u)); }
+/* Text wraps to the width the grids set and never sizes the panel itself: otherwise
+   swapping the info text on hover resizes the window, the grid slides out from under
+   the cursor, the hover ends, and it loops. */
+.cargo > .mod-info, .cargo > .cargo-bin, .cargo-overflow { width: 0; min-width: 100%; }
+.cargo-bin { text-align: center; font-size: 16px; color: var(--muted); padding: var(--u); }
+.cargo-bin.live { color: var(--bad); }
+
+.fit-stats { display: grid; grid-template-columns: repeat(10, 1fr); gap: calc(2 * var(--u)); padding-top: calc(3 * var(--u)); border-top: var(--u) solid #161d2b; }
 .stat-cell { display: flex; flex-direction: column; align-items: center; font-size: 15px; }
 .stat-cell .num { font-size: 13px; }
 .stat-cell .delta { font-size: 10px; }

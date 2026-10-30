@@ -1,6 +1,6 @@
 import { emptyRes, Res, StructureKind, TileKind } from './defs';
 import type { Engine } from './engine';
-import type { WorldEvent } from './protocol';
+import type { CargoState, WorldEvent } from './protocol';
 import type { Vitals } from './ships/vitals';
 import { LocalShard } from './sim/LocalShard';
 import { createStore } from './store';
@@ -12,7 +12,7 @@ export interface TileSnap {
   kind: TileKind;
   variant: number;
   owner: number;
-  structure: null | { kind: StructureKind; progress: number; level: number; owner: number; finishAt: number; hp: number; maxHp: number };
+  structure: null | { id: number; kind: StructureKind; progress: number; level: number; owner: number; finishAt: number; hp: number; maxHp: number };
   /** False while the chunk's live state hasn't arrived yet. */
   known: boolean;
   ok?: boolean;
@@ -40,6 +40,8 @@ export interface HudState {
   fittingOpen: boolean;
   /** Mouse mode: aiming weapons rather than selecting and placing. */
   aim: boolean;
+  /** Storage Bay whose window is open (structure id). */
+  storageOpen: number | null;
   ship: Vitals & { refuelling: boolean; wrecked: boolean; firing: boolean };
 }
 
@@ -62,10 +64,15 @@ export const hud = createStore<HudState>({
   pilot: false,
   fittingOpen: false,
   aim: false,
+  storageOpen: null,
   ship: { hp: 0, maxHp: 0, fuel: 0, maxFuel: 0, refuelling: false, wrecked: false, firing: false },
 });
 
+/** Cargo as the client shows it: the shard's state, with the player's moves applied ahead of confirmation. */
+export const cargo = createStore<CargoState>({ holds: { wisp: [], lancer: [], bastion: [], mule: [] }, stores: {} });
+
 world.listeners = {
+  cargo: (c) => cargo.set(c),
   event: () => hud.set({ feed: world.log }),
   player: (p) => hud.set({ res: p.res, rates: p.rates, sectors: p.sectors, cycle: p.cycle }),
 };

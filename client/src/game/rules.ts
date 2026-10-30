@@ -23,6 +23,7 @@ export function canBuild(w: WorldRead, kind: StructureKind, col: number, row: nu
   if (tk === null) return { ok: false, reason: 'Sector data still loading' };
   if (tk === 'void') return { ok: false, reason: 'No solid ground' };
   if (w.structure(col, row)) return { ok: false, reason: 'Sector occupied' };
+  if (tk === 'cache' || tk === 'cacheOpen') return { ok: false, reason: 'Caches can only be opened by a ship' };
   if (def.place === 'none') return { ok: false, reason: 'Cannot be built' };
   const owner = w.owner(col, row);
   if (def.place === 'frontier') {

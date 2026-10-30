@@ -6,6 +6,7 @@ import { HULL, HULLS, HullId, Slot, SLOTS } from '../game/ships/hulls';
 import { MODULE, MODULES } from '../game/ships/modules';
 import { useStore } from '../game/store';
 import { ModuleIcon, SLOT_COLORS, UiIcon } from './icons';
+import { HangarHold } from './CargoHold';
 import { ShipPreview } from './ShipPreview';
 
 const SLOT_NAME: Record<Slot, string> = { high: 'High', mid: 'Mid', low: 'Low' };
@@ -43,7 +44,7 @@ export function Fitting() {
   const open = useStore(hud, (s) => s.fittingOpen);
   const hg = useStore(hangar, (s) => s);
   const [viewHull, setViewHull] = useState<HullId>(hg.active);
-  const [tab, setTab] = useState<Slot>('high');
+  const [tab, setTab] = useState<Slot | 'cargo'>('high');
   const [hover, setHover] = useState<string | null>(null);
   if (!open) return null;
 
@@ -152,7 +153,14 @@ export function Fitting() {
                   <span style={{ color: SLOT_COLORS[s][0] }}>{SLOT_NAME[s]}</span>
                 </button>
               ))}
+              <button className={`pbtn tab ${tab === 'cargo' ? 'on' : ''}`} onClick={() => setTab('cargo')}>
+                <span>Cargo</span>
+              </button>
             </div>
+            {tab === 'cargo' ? (
+              <HangarHold hull={viewHull} fit={fit} />
+            ) : (
+            <>
             <div className="muted tab-hint">{SLOT_HINT[tab]}</div>
             <ul className="mod-list">
               {MODULES.filter((m) => m.slot === tab).map((m) => {
@@ -188,6 +196,8 @@ export function Fitting() {
                 <span className="muted">Click a module to fit it. Click a fitted module to remove it. Hover to preview its effect.</span>
               )}
             </div>
+            </>
+            )}
           </aside>
         </div>
 

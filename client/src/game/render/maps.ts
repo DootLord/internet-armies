@@ -16,7 +16,7 @@ import type { WorldView } from '../WorldView';
  * value and low in saturation: on a strategic map the territory should pop and
  * terrain should read as quiet texture, never compete with faction colours.
  */
-const KIND_RGB: RGB[] = ['#000000', '#283043', '#231f27', '#30261f', '#1f3238', '#26334a', '#2a2337', '#272123'].map(hex);
+const KIND_RGB: RGB[] = ['#000000', '#283043', '#231f27', '#30261f', '#1f3238', '#26334a', '#2a2337', '#272123', '#3a2f1c', '#283043'].map(hex);
 const FACTION_RGB = FACTIONS.map((f) => f.rgb);
 
 export const OV_W = CS * 3 + 1;

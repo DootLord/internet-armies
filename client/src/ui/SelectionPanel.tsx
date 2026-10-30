@@ -98,6 +98,16 @@ export function SelectionPanel() {
               ))}
             {!s && sel.owner === -1 && world.isAdjacentTo(sel.col, sel.row, PLAYER) && <span className="hint">Frontier: a Claim Relay here expands your borders</span>}
           </div>
+          {sel.kind === 'cache' && (
+            <button className="pbtn wide" onClick={() => getEngine()?.openSelectedCache()}>
+              Open cache
+            </button>
+          )}
+          {mine && s!.kind === 'storage' && s!.progress >= 1 && (
+            <button className="pbtn wide" onClick={() => hud.set({ storageOpen: s!.id })}>
+              Open storage
+            </button>
+          )}
           {mine && s!.kind !== 'nexus' && (
             <button className="pbtn danger" onClick={() => getEngine()?.demolishSelected()}>
               Demolish

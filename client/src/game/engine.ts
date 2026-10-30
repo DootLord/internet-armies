@@ -6,7 +6,7 @@ import { assets, fractureSprite, SOX, SOY, SpriteShard, STAR_DOMAIN, TILE_PAD } 
 import { Store } from './store';
 import { Chunk, CHUNK_PX_H, CHUNK_PX_W, CS_BITS, localIndex, pack } from './chunks';
 import { KINDS, VOID } from './terrain';
-import { hpOf, progressOf, Structure } from './protocol';
+import { hpOf, progressOf, ShipReport, Structure } from './protocol';
 import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
 import { hash2, smoothstep } from './rng';
 import type { WorldView } from './WorldView';
@@ -14,6 +14,7 @@ import { computeStats, flightParams, weaponStats } from './ships/fitting';
 import { hangar } from './ships/hangar';
 import { HULL, HullDef, hullSprites } from './ships/hulls';
 import { shipHits } from './ships/shapes';
+import { ITEMS } from './ships/cargo';
 import { autopilot, FlightInput, FlightParams, FlightState, newFlight, stepFlight } from './ships/flight';
 import { BANK_ANGLE, BANK_LEVELS, PITCH_SIN, projectPoint, shatter, ShipSprites, splitModel } from './ships/voxel';
 import { accentRamp, css } from './palette';
@@ -365,7 +366,8 @@ export class Engine {
       else if (k === 'e' && !e.repeat) this.setAim(!this.aim);
       else if (k === 'x' && import.meta.env.DEV && !e.repeat) this.damageShip(this.vitals.maxHp * 0.25); // dev: test damage and death
       else if (k === 'escape') {
-        if (this.aim) this.setAim(false);
+        if (this.hud.get().storageOpen !== null) this.hud.set({ storageOpen: null });
+        else if (this.aim) this.setAim(false);
         else if (this.buildMode) this.setBuildMode(null);
         else if (this.pilot) this.setPilot(false);
         else this.select(null);
@@ -430,7 +432,7 @@ export class Engine {
     const snap: TileSnap = {
       col, row, kind, variant: this.view.chunkAt(col, row)!.variant[localIndex(col, row)], owner: this.view.owner(col, row),
       structure: s
-        ? { kind: s.kind, progress: progressOf(s, this.view.now()), level: s.level, owner: s.owner, finishAt: s.finishAt, hp: hpOf(s, this.view.now()), maxHp: STRUCT[s.kind].hp }
+        ? { id: s.id, kind: s.kind, progress: progressOf(s, this.view.now()), level: s.level, owner: s.owner, finishAt: s.finishAt, hp: hpOf(s, this.view.now()), maxHp: STRUCT[s.kind].hp }
         : null,
       known: this.view.known(col, row),
     };
@@ -713,6 +715,28 @@ export class Engine {
     return null;
   }
 
+  /** Where the flagship is and what it's fitted with, for orders the shard validates. */
+  shipReport(): ShipReport {
+    const h = hangar.get();
+    return { x: this.ship.x, y: this.ship.y, hull: h.active, fit: h.fits[h.active] };
+  }
+
+  /** Crack open the selected cache with the flagship: the shard rolls the loot into the hold. */
+  async openSelectedCache() {
+    if (!this.selected || this.wreck) return;
+    const [col, row] = this.selected;
+    const r = await this.view.openCache(col, row, this.shipReport());
+    if (!r.ok) return toast(r.reason!, 'bad');
+    const x = tileX(col, row) + CX, y = tileY(row) + CY - 8;
+    this.sparks(x, y, 24);
+    this.booms.push({ x, y, t: 0.4, size: 0.45 });
+    const counts = new Map<string, number>();
+    for (const k of r.loot ?? []) counts.set(ITEMS[k].name, (counts.get(ITEMS[k].name) ?? 0) + 1);
+    const found = [...counts].map(([n, c]) => (c > 1 ? `${n} x${c}` : n)).join(', ');
+    toast(found ? `Found ${found}` : 'Hold full: nothing taken', found ? 'good' : 'bad');
+    if (r.lost) toast(`${r.lost} item${r.lost > 1 ? 's' : ''} left behind: hold full`, 'bad');
+  }
+
   private ceaseFire() {
     if (this.target === null) return;
     this.target = null;
@@ -757,9 +781,8 @@ export class Engine {
 
   private async openFire(id: number) {
     this.target = id;
-    const h = hangar.get();
     // An intent, not a damage number: the shard works out the damage from the fit itself.
-    const r = await this.view.fire({ target: id, x: this.ship.x, y: this.ship.y, hull: h.active, fit: h.fits[h.active] });
+    const r = await this.view.fire({ target: id, ...this.shipReport() });
     if (!r.ok && this.target === id) {
       this.target = null;
       toast(r.reason!, 'bad');

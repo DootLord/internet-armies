@@ -7,11 +7,16 @@ import { mulberry32 } from '../rng';
 import { CHUNK_TILES, CS, CS_BITS, chunkKeyOf, localIndex, pack, unpackA, unpackB } from '../chunks';
 import { fillChunk, KIND_ID, KINDS, TerrainParams, tileCenterX, tileCenterY, VOID } from '../terrain';
 import { canBuild, WorldRead } from '../rules';
-import { hpOf } from '../protocol';
+import { hpOf, progressOf } from '../protocol';
 import type {
-  BuildCheck, ChunkDelta, ChunkSnapshot, FireOrder, Overview, PlayerState, SourceHandlers, Structure, WorldEvent, WorldMeta, WorldSource,
+  BuildCheck, CacheResult, CargoOp, CargoState, ChunkDelta, ChunkSnapshot, Container, FireOrder, Overview, PlayerState, ShipReport, SourceHandlers,
+  Structure, WorldEvent, WorldMeta, WorldSource,
 } from '../protocol';
-import { computeStats, weaponStats } from '../ships/fitting';
+import {
+  addItem, CACHE_RANGE, CACHE_RESPAWN, cargoGrid, CargoItem, Grid, insertItem, ItemKind, moveItem, removeItem, rollLoot, STORAGE_GRID, STORAGE_RANGE,
+} from '../ships/cargo';
+import { computeStats, Fit, weaponStats } from '../ships/fitting';
+import { HULLS, HullId } from '../ships/hulls';
 
 export interface ShardOptions {
   seed: number;
@@ -34,6 +39,12 @@ export class LocalShard implements WorldSource, WorldRead {
   private byId = new Map<number, Structure>();
   /** What the player is shooting. A real shard keeps one entry per shooter. */
   private firing: Structure | null = null;
+  /** The player's ship holds (a real shard keys these by player) and every Storage's contents. */
+  private holds = Object.fromEntries(HULLS.map((h) => [h.id, []])) as unknown as Record<HullId, CargoItem[]>;
+  private stores = new Map<number, CargoItem[]>();
+  private nextItem = 1;
+  /** Opened caches: packed tile -> server time it restocks. */
+  private opened = new Map<number, number>();
   private building = new Set<Structure>();
   private factionTiles: Set<number>[] = FACTIONS.map(() => new Set());
   private factionStructs: Set<Structure>[] = FACTIONS.map(() => new Set());
@@ -103,6 +114,7 @@ export class LocalShard implements WorldSource, WorldRead {
     this.h = h;
     this.sendPlayer();
     this.sendOverview();
+    this.sendCargo();
     for (const e of [...this.log].reverse()) if (this.visibleEvent(e)) this.send((x) => x.event(e));
     return this.reply({ seed: this.params.seed, radiusPx: this.params.radiusPx, homes: this.homes, player: PLAYER });
   }
@@ -136,6 +148,7 @@ export class LocalShard implements WorldSource, WorldRead {
     let r: BuildCheck = { ok: true };
     if (!s || s.owner !== PLAYER) r = { ok: false, reason: 'Nothing to demolish' };
     else if (s.kind === 'nexus') r = { ok: false, reason: 'The Nexus cannot be demolished' };
+    else if (this.stores.get(s.id)?.length) r = { ok: false, reason: 'Empty the Storage first' };
     else {
       const cost = STRUCT[s.kind].cost;
       for (const k of RES_KEYS) this.res[k] += Math.floor((cost[k] ?? 0) * 0.5);
@@ -163,6 +176,99 @@ export class LocalShard implements WorldSource, WorldRead {
     return this.reply({ ok: true });
   }
 
+  // ---------------------------------------------------------------- cargo
+  cargo(op: CargoOp, ship: ShipReport): Promise<BuildCheck> {
+    const r = this.applyCargo(op, ship);
+    // Always answer with the truth, so an optimistic client snaps back if refused.
+    this.sendCargo();
+    return this.reply(r);
+  }
+
+  /** Resolve a container to its items and grid, checking the player may reach it right now. */
+  private container(c: Container, ship: ShipReport): { items: CargoItem[]; grid: Grid; set: (v: CargoItem[]) => void } | string {
+    if ('ship' in c) {
+      const g = this.holdGrid(c.ship, c.fit);
+      if (typeof g === 'string') return g;
+      return { items: this.holds[c.ship], grid: g, set: (v) => (this.holds[c.ship] = v) };
+    }
+    const s = this.byId.get(c.storage);
+    if (!s || s.kind !== 'storage') return 'Storage not found';
+    if (s.owner !== PLAYER) return 'Not your Storage';
+    if (progressOf(s, this.now()) < 1) return 'Still under construction';
+    if (Math.hypot(tileCenterX(s.col, s.row) - ship.x, tileCenterY(s.row) - ship.y) > STORAGE_RANGE) return 'Fly closer to the Storage';
+    return { items: this.storeOf(s.id), grid: STORAGE_GRID, set: (v) => this.stores.set(s.id, v) };
+  }
+
+  private holdGrid(hull: HullId, fit: Fit): Grid | string {
+    const st = computeStats(hull, fit);
+    if (st.cpuUsed > st.cpu + 1e-9 || st.powerUsed > st.power + 1e-9) return 'Invalid fit';
+    return cargoGrid(st.cargo);
+  }
+
+  private storeOf(id: number) {
+    let v = this.stores.get(id);
+    if (!v) this.stores.set(id, (v = []));
+    return v;
+  }
+
+  private applyCargo(op: CargoOp, ship: ShipReport): BuildCheck {
+    const from = this.container(op.from, ship);
+    if (typeof from === 'string') return { ok: false, reason: from };
+    const it = from.items.find((o) => o.uid === op.uid);
+    if (!it) return { ok: false, reason: 'Item not found' };
+    if (op.op === 'jettison') {
+      from.set(removeItem(from.items, op.uid));
+      return { ok: true };
+    }
+    const same = JSON.stringify(op.from) === JSON.stringify(op.to);
+    if (same) {
+      const next = moveItem(from.items, from.grid, op.uid, op.x, op.y, op.rot);
+      if (!next) return { ok: false, reason: "Doesn't fit there" };
+      from.set(next);
+      return { ok: true };
+    }
+    // Between holds: one side must be the ship you're flying, the other a Storage it can reach.
+    const shipSide = 'ship' in op.from ? op.from : 'ship' in op.to ? op.to : null;
+    if (!shipSide || ('ship' in op.from && 'ship' in op.to)) return { ok: false, reason: 'Items move between your ship and a Storage' };
+    if (shipSide.ship !== ship.hull) return { ok: false, reason: 'Only the ship you are flying can load cargo' };
+    const to = this.container(op.to, ship);
+    if (typeof to === 'string') return { ok: false, reason: to };
+    const next = insertItem(to.items, to.grid, { ...it, x: op.x, y: op.y, rot: op.rot });
+    if (!next) return { ok: false, reason: "Doesn't fit there" };
+    from.set(removeItem(from.items, op.uid));
+    to.set(next);
+    return { ok: true };
+  }
+
+  openCache(col: number, row: number, ship: ShipReport): Promise<CacheResult> {
+    if (this.kind(col, row) !== 'cache') return this.reply({ ok: false, reason: 'Nothing left to open' });
+    if (Math.hypot(tileCenterX(col, row) - ship.x, tileCenterY(row) - ship.y) > CACHE_RANGE) return this.reply({ ok: false, reason: 'Fly closer to the cache' });
+    const g = this.holdGrid(ship.hull, ship.fit);
+    if (typeof g === 'string') return this.reply({ ok: false, reason: g });
+    // Loot is rolled here, never on the client, and lands straight in the hold.
+    const loot: ItemKind[] = [];
+    let lost = 0;
+    for (const kind of rollLoot(this.rnd)) {
+      const next = addItem(this.holds[ship.hull], g, kind, this.nextItem);
+      if (next) {
+        this.holds[ship.hull] = next;
+        this.nextItem++;
+        loot.push(kind);
+      } else lost++;
+    }
+    this.setTerrain(col, row, KIND_ID.cacheOpen);
+    this.opened.set(pack(col, row), this.now() + CACHE_RESPAWN);
+    this.flush();
+    this.sendCargo();
+    return this.reply({ ok: true, loot, lost });
+  }
+
+  private sendCargo() {
+    const c: CargoState = { holds: structuredClone(this.holds), stores: {} };
+    for (const s of this.factionStructs[PLAYER]) if (s.kind === 'storage') c.stores[s.id] = structuredClone(this.storeOf(s.id));
+    this.send((h) => h.cargo(c));
+  }
+
   private ceaseFire() {
     if (this.firing && this.byId.has(this.firing.id)) this.setDrain(this.firing, 0);
     this.firing = null;
@@ -181,6 +287,7 @@ export class LocalShard implements WorldSource, WorldRead {
   private destroy(s: Structure) {
     if (this.firing === s) this.firing = null;
     this.removeStruct(s);
+    if (this.stores.delete(s.id)) this.sendCargo();
     (this.delta(s.col, s.row).destroyed ??= []).push(localIndex(s.col, s.row));
     this.emit({ faction: s.owner, type: 'info', col: s.col, row: s.row, text: `lost a ${STRUCT[s.kind].name} to weapons fire` });
     if (s.owner === PLAYER) this.sendPlayer();
@@ -290,6 +397,11 @@ export class LocalShard implements WorldSource, WorldRead {
     // No damage ticks: health is a straight line, so just check whether it has reached zero.
     if (this.firing && !this.byId.has(this.firing.id)) this.firing = null;
     if (this.firing && hpOf(this.firing, now) <= 0) this.destroy(this.firing);
+    for (const [k, at] of this.opened)
+      if (now >= at) {
+        this.opened.delete(k);
+        this.setTerrain(unpackA(k), unpackB(k), KIND_ID.cache);
+      }
     this.tickAcc += dt;
     while (this.tickAcc >= 1) {
       this.tickAcc -= 1;
@@ -367,6 +479,7 @@ export class LocalShard implements WorldSource, WorldRead {
 
   private complete(s: Structure, silent: boolean) {
     const def = STRUCT[s.kind];
+    if (s.kind === 'storage' && s.owner === PLAYER) queueMicrotask(() => this.sendCargo());
     if (s.owner === PLAYER) this.rateCache = null;
     let claimed = 0;
     if (def.claim)
@@ -393,6 +506,9 @@ export class LocalShard implements WorldSource, WorldRead {
     if (!mine.some(([c, r]) => TILE_INFO[this.kind(c, r)].deposit)) this.setTerrain(...mine[mine.length - 1], KIND_ID.ore);
     const solar = this.randomOwned(PLAYER, false);
     if (solar) this.place('solar', solar[0], solar[1], PLAYER, true);
+    const home = this.homes[PLAYER];
+    const ring = hexesInRadius(home.col, home.row, 7).filter(([c, r]) => this.kindId(c, r) !== VOID && !this.structure(c, r) && this.owner(c, r) === -1);
+    for (let i = 0; i < 3 && ring.length; i++) this.setTerrain(...ring.splice(Math.floor(this.rnd() * ring.length), 1)[0], KIND_ID.cache);
 
     for (let f = 1; f < n; f++) {
       const relays = 3 + Math.floor(this.rnd() * 3);

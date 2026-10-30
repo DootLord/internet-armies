@@ -8,6 +8,7 @@ import {
   accentRamp, C_AMBER, C_CYAN, C_RED, C_VENT, C_WHITE, CRY, css, GAS, hex, ICE, lum, mix, ORE, OUTLINE, PANEL, RGB, ROCK, RUST, STEEL,
 } from './palette';
 import { bayer, fbm, hash2, mulberry32, smoothstep, vnoise } from './rng';
+import { ItemKind, ITEMS } from './ships/cargo';
 
 export const TILE_PAD = 18; // headroom above the face for crystals etc.
 const TILE_DEPTH = 22;
@@ -76,7 +77,7 @@ function ell(cx: number, cy: number, rx: number, ry: number, f: (x: number, y: n
 // ============================================================== tiles
 export interface TileSprite { color: HTMLCanvasElement; emit: HTMLCanvasElement | null; }
 
-const KIND_SEED: Record<TileKind, number> = { void: 0, plate: 11, rock: 23, ore: 37, crystal: 41, ice: 53, gas: 67, ruin: 79 };
+const KIND_SEED: Record<TileKind, number> = { void: 0, plate: 11, rock: 23, ore: 37, crystal: 41, ice: 53, gas: 67, ruin: 79, cache: 83, cacheOpen: 89 };
 
 function makeTile(kind: TileKind, variant: number): TileSprite {
   const seed = KIND_SEED[kind] * 97 + variant * 13;
@@ -84,9 +85,10 @@ function makeTile(kind: TileKind, variant: number): TileSprite {
   const c = new Pix(TW, TILE_SH), e = new Pix(TW, TILE_SH);
   let glows = false;
   const P = TILE_PAD;
-  const metal = kind === 'plate' || kind === 'ruin';
+  const cache = kind === 'cache' || kind === 'cacheOpen';
+  const metal = kind === 'plate' || kind === 'ruin' || cache;
   const R = kind === 'ice' ? ICE : metal ? STEEL : kind === 'gas' ? GAS : ROCK;
-  const base = { void: 0, plate: 0.5, ruin: 0.36, rock: 0.5, ore: 0.44, crystal: 0.36, ice: 0.46, gas: 0.45 }[kind];
+  const base = { void: 0, plate: 0.5, ruin: 0.36, rock: 0.5, ore: 0.44, crystal: 0.36, ice: 0.46, gas: 0.45, cache: 0.42, cacheOpen: 0.38 }[kind];
   const rough = metal ? 0.12 : kind === 'ice' ? 0.25 : 0.5;
 
   // --- top face
@@ -134,7 +136,7 @@ function makeTile(kind: TileKind, variant: number): TileSprite {
     return out;
   };
 
-  if (kind === 'plate' || kind === 'ruin') {
+  if (kind === 'plate' || kind === 'ruin' || cache) {
     for (let y = 0; y < FH; y++)
       for (let x = 0; x < TW; x++) {
         if (!inFace(x, y)) continue;
@@ -153,6 +155,28 @@ function makeTile(kind: TileKind, variant: number): TileSprite {
       }
       glows = true;
     }
+  }
+
+  if (cache) {
+    // A supply pod on a pad: an isometric crate with a glowing amber seal. Spent ones gape open, dark.
+    const open = kind === 'cacheOpen', cx = 16, top = 10, hw = 7, h = 5;
+    for (let x = cx - hw; x < cx + hw; x++) {
+      const dx = x + 0.5 - cx, a = hw - Math.abs(dx);
+      const yb = Math.round(top - a / 2), yf = Math.round(top + a / 2);
+      for (let y = yb; y <= yf; y++) c.set(x, y + P, open ? (y === yb ? STEEL[3] : STEEL[0]) : pick(STEEL, 0.7 + (y === yf ? 0.12 : 0), x, y));
+      for (let y = yf + 1; y <= yf + h; y++) {
+        const seam = y === yf + 2 && !open;
+        if (seam) { c.set(x, y + P, mix(C_AMBER, C_WHITE, 0.3)); e.set(x, y + P, C_AMBER, 200); }
+        else c.set(x, y + P, pick(STEEL, (dx < 0 ? 0.5 : 0.3) - ((y - yf) / h) * 0.1 + (y === yf + h ? -0.3 : 0), x, y));
+      }
+      // Raised lid, propped behind the open crate.
+      if (open) for (let y = yb - 5; y <= yb - 3; y++) c.set(x, y + P, pick(STEEL, y === yb - 5 ? 0.66 : 0.4, x, y));
+    }
+    if (!open) {
+      c.set(cx, top - 4 + P, mix(C_AMBER, C_WHITE, 0.5));
+      e.set(cx, top - 4 + P, C_AMBER, 255);
+    }
+    glows = true;
   }
 
   if (kind === 'ruin') {
@@ -343,6 +367,79 @@ class Painter {
       }
     return { color: c.toCanvas(), emit: this.e.toCanvas(), holo: holo.toCanvas(), shine: shine.toCanvas(), beacons: this.beacons };
   }
+}
+
+// ============================================================== cargo items
+/** 16 art px per cargo cell; the hold UI scales them by its pixel unit. */
+export const ITEM_CELL_PX = 16;
+const ITEM_PAINT: Record<ItemKind, (p: Pix) => void> = {
+  ore(p) {
+    // Three lumps of dark regolith shot through with hot ferrite veins, back to front.
+    for (const [cx, cy, rx, ry, seed] of [[21, 12, 8, 7, 2], [11, 18, 9, 8, 1], [21, 23, 9, 6, 3]])
+      ell(cx, cy, rx, ry, (x, y, q, nx, ny) => {
+        const light = 0.62 - nx * 0.28 - ny * 0.32 + (1 - q) * 0.12;
+        if (fbm(x * 0.3, y * 0.3, seed * 17) > 0.6) p.set(x, y, pick(ORE, 0.45 + light * 0.55, x, y));
+        else p.set(x, y, pick(ROCK, light, x, y));
+      });
+  },
+  shard(p) {
+    // One tall crystal leaning on a stub, lit from the upper left.
+    for (const [bx, by, h, w] of [[10, 14, 6, 1], [7, 14, 11, 2]] as [number, number, number, number][])
+      for (let y = by - h; y <= by; y++) {
+        const hw = Math.round(w * Math.min(1, (y - (by - h)) / (h * 0.4)));
+        for (let x = bx - hw; x <= bx + hw; x++) p.set(x, y, y === by - h ? CRY[6] : x < bx ? CRY[5] : x === bx ? CRY[4] : CRY[2]);
+      }
+  },
+  scrap(p) {
+    // A buckled plate: riveted steel with rust blooms and a torn edge.
+    for (let y = 4; y < 13; y++)
+      for (let x = 2; x < 30; x++) {
+        const bend = Math.round(Math.sin(x * 0.25) * 1.5);
+        const yy = y + bend;
+        if (x > 26 && (x + y) % 3 === 0) continue;
+        const n = fbm(x * 0.25, y * 0.3, 5);
+        p.set(x, yy, n > 0.6 ? pick(RUST, (n - 0.6) * 4, x, yy) : pick(STEEL, 0.62 - (y - 4) * 0.04 + (y === 4 ? 0.15 : 0), x, yy));
+      }
+    for (const x of [5, 13, 21]) p.set(x, 6 + Math.round(Math.sin(x * 0.25) * 1.5), STEEL[8]);
+  },
+  fuelcell(p) {
+    // Upright canister: rounded steel body, glowing fuel window, capped ends.
+    for (let y = 3; y < 30; y++)
+      for (let x = 3; x < 13; x++) {
+        const dx = (x + 0.5 - 8) / 5, cap = y < 6 || y > 26;
+        const v = 0.62 - dx * 0.3 - (cap ? 0.15 : 0);
+        p.set(x, y, pick(cap ? STEEL : PANEL, v, x, y));
+        if (!cap && y > 10 && y < 22 && Math.abs(dx) < 0.5) p.set(x, y, mix(C_CYAN, C_WHITE, y > 18 ? 0 : 0.35));
+      }
+  },
+  relic(p) {
+    // Dark alien lattice: a slab with a carved ring and violet circuitry.
+    ell(24, 18, 20, 12, (x, y, q, nx, ny) => {
+      const light = 0.5 - nx * 0.25 - ny * 0.3;
+      p.set(x, y, pick(GAS, light + (q > 0.85 ? 0.2 : 0), x, y));
+      const r = Math.hypot((x + 0.5 - 24) / 9, (y + 0.5 - 17) / 6);
+      if (Math.abs(r - 1) < 0.12 || ((x + y) % 7 === 0 && q < 0.6)) p.set(x, y, mix(C_VENT, C_WHITE, 0.25));
+    });
+    ell(24, 17, 3, 2, (x, y) => p.set(x, y, mix(C_VENT, C_WHITE, 0.6)));
+  },
+};
+
+const itemArtCache = new Map<ItemKind, string>();
+/** A cargo item's portrait as a data URL, outlined like world sprites. */
+export function itemArt(kind: ItemKind): string {
+  let url = itemArtCache.get(kind);
+  if (!url) {
+    const { w, h } = ITEMS[kind], W = w * ITEM_CELL_PX, H = h * ITEM_CELL_PX;
+    const p = new Pix(W, H);
+    ITEM_PAINT[kind](p);
+    const src = new Uint8ClampedArray(p.d);
+    const solid = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && src[(y * W + x) * 4 + 3] > 0;
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++)
+        if (!solid(x, y) && (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1))) p.set(x, y, OUTLINE);
+    itemArtCache.set(kind, (url = p.toCanvas().toDataURL()));
+  }
+  return url;
 }
 
 export interface SpriteShard { color: HTMLCanvasElement; emit: HTMLCanvasElement; w: number; h: number; x: number; y: number }
@@ -539,6 +636,22 @@ const PAINT: Record<StructureKind, (p: Painter) => void> = {
     for (let x = 8; x < 33; x += 3) p.glow(x, p.prismFront(20, 41, 14, x) + 2, a[2], 180);
     p.glow(33, 13, a[4]);
     p.beacons.push([33, 13]);
+  },
+  storage(p) {
+    const a = p.acc;
+    p.prism(20, 41, 15, 3, S, -0.04);
+    // Stacked container modules: two on the deck, one on top, faction-striped.
+    for (const [cx, top, hw, h] of [[12, 32, 7, 7], [27, 33, 7, 7], [19, 23, 8, 7]] as [number, number, number, number][]) {
+      p.prism(cx, top, hw, h, S, 0.02);
+      for (let x = cx - hw + 1; x < cx + hw - 1; x += 2) p.px(x, p.prismFront(cx, top, hw, x) + 3, S[2]);
+      for (let x = cx - hw; x < cx + hw; x++) p.glow(x, p.prismFront(cx, top, hw, x) + h - 1, a[2], 150);
+    }
+    // Loading arm over the stack.
+    p.line(35, 40, 35, 12, S[6]); p.line(36, 40, 36, 12, S[3]);
+    p.line(35, 12, 22, 12, S[6]); p.line(22, 12, 22, 16, S[4]);
+    p.glow(22, 17, C_AMBER, 220);
+    p.glow(35, 11, a[4]);
+    p.beacons.push([35, 11]);
   },
 };
 

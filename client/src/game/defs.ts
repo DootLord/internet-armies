@@ -1,7 +1,7 @@
 import { hex, RGB } from './palette';
 
-export type TileKind = 'void' | 'plate' | 'rock' | 'ore' | 'crystal' | 'ice' | 'gas' | 'ruin';
-export const TILE_KINDS: Exclude<TileKind, 'void'>[] = ['plate', 'rock', 'ore', 'crystal', 'ice', 'gas', 'ruin'];
+export type TileKind = 'void' | 'plate' | 'rock' | 'ore' | 'crystal' | 'ice' | 'gas' | 'ruin' | 'cache' | 'cacheOpen';
+export const TILE_KINDS: Exclude<TileKind, 'void'>[] = ['plate', 'rock', 'ore', 'crystal', 'ice', 'gas', 'ruin', 'cache', 'cacheOpen'];
 
 export type ResKey = 'credits' | 'alloy' | 'energy' | 'crystal';
 export type Res = Record<ResKey, number>;
@@ -23,9 +23,11 @@ export const TILE_INFO: Record<TileKind, { name: string; desc: string; deposit?:
   ice: { name: 'Cryo Shelf', desc: 'Frozen volatiles, crackable for fuel.', deposit: { energy: 4 } },
   gas: { name: 'Plasma Vent', desc: 'Ionised gas escaping from the core.', deposit: { energy: 5, credits: 1 } },
   ruin: { name: 'Derelict Wreck', desc: 'Salvage from a forgotten war.' },
+  cache: { name: 'Sealed Cache', desc: 'A drifting supply pod. Bases can’t touch it: fly a ship close and crack it open.' },
+  cacheOpen: { name: 'Spent Cache', desc: 'Already looted. Salvage crews restock it in time.' },
 };
 
-export type StructureKind = 'nexus' | 'extractor' | 'solar' | 'habitat' | 'turret' | 'shield' | 'relay' | 'dronebay' | 'depot';
+export type StructureKind = 'nexus' | 'extractor' | 'solar' | 'habitat' | 'turret' | 'shield' | 'relay' | 'dronebay' | 'depot' | 'storage';
 
 export interface StructureDef {
   kind: StructureKind;
@@ -53,6 +55,7 @@ export const STRUCTURES: StructureDef[] = [
   { kind: 'relay', name: 'Claim Relay', role: 'Expansion', desc: 'Built on the frontier. Extends your territory.', cost: { credits: 300, alloy: 150 }, buildTime: 25, place: 'frontier', produce: () => ({ energy: -1 }), claim: 2, light: 44, hp: 1600 },
   { kind: 'dronebay', name: 'Drone Bay', role: 'Logistics', desc: 'Launches haulers between your structures.', cost: { credits: 220, alloy: 140 }, buildTime: 18, place: 'owned', produce: () => ({ credits: 2, energy: -2 }), light: 46, hp: 1300 },
   { kind: 'depot', name: 'Fuel Depot', role: 'Logistics', desc: 'Refuels your ships while they hover nearby.', cost: { credits: 140, alloy: 60 }, buildTime: 12, place: 'owned', produce: () => ({ energy: -1 }), light: 42, hp: 800 },
+  { kind: 'storage', name: 'Storage Bay', role: 'Logistics', desc: 'A huge, immovable hold. Ships nearby can load and unload cargo.', cost: { credits: 180, alloy: 120 }, buildTime: 15, place: 'owned', produce: () => ({ energy: -1 }), light: 40, hp: 2000 },
 ];
 export const STRUCT = Object.fromEntries(STRUCTURES.map((s) => [s.kind, s])) as Record<StructureKind, StructureDef>;
 export const BUILDABLE = STRUCTURES.filter((s) => s.place !== 'none');

@@ -7,7 +7,7 @@ import { emptyRes, StructureKind, TileKind } from './defs';
 import { Chunk, CHUNK_PX_H, CHUNK_PX_W, chunkKeyOf, localIndex, pack } from './chunks';
 import { fillChunk, KINDS, TerrainParams } from './terrain';
 import { canBuild, isAdjacentTo, WorldRead } from './rules';
-import type { BuildCheck, ChunkDelta, FireOrder, ChunkSnapshot, Overview, PlayerState, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
+import type { BuildCheck, CargoOp, CargoState, ChunkDelta, FireOrder, ShipReport, ChunkSnapshot, Overview, PlayerState, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
 
 /** Beyond this many chunks in view, stop per-chunk streaming and rely on the overview. */
 export const MAX_DETAIL_CHUNKS = 300;
@@ -33,6 +33,7 @@ export interface ViewListeners {
   overview?: (o: Overview) => void;
   /** A structure in a watched chunk was destroyed by fire (not demolished). */
   destroyed?: (s: Structure) => void;
+  cargo?: (c: CargoState) => void;
 }
 
 export class WorldView implements WorldRead {
@@ -43,6 +44,8 @@ export class WorldView implements WorldRead {
   params: TerrainParams = { seed: 0, radiusPx: 1 };
   player: PlayerState = { res: emptyRes(), rates: emptyRes(), sectors: 0, structures: 0, cycle: 0 };
   overview: Overview | null = null;
+  /** The player's holds and Storage contents, as the shard last reported them. */
+  cargo: CargoState | null = null;
   log: WorldEvent[] = [];
   listeners: ViewListeners = {};
   detail = true;
@@ -58,6 +61,10 @@ export class WorldView implements WorldRead {
     this.meta = await this.source.connect({
       chunk: (s) => this.onSnapshot(s),
       delta: (d) => this.onDelta(d),
+      cargo: (c) => {
+        this.cargo = c;
+        this.listeners.cargo?.(c);
+      },
       player: (p) => {
         this.player = p;
         this.listeners.player?.(p);
@@ -120,6 +127,14 @@ export class WorldView implements WorldRead {
 
   fire(order: FireOrder | null) {
     return this.source.fire(order);
+  }
+
+  cargoOp(op: CargoOp, ship: ShipReport) {
+    return this.source.cargo(op, ship);
+  }
+
+  openCache(col: number, row: number, ship: ShipReport) {
+    return this.source.openCache(col, row, ship);
   }
 
   // ---------------------------------------------------------------- streaming

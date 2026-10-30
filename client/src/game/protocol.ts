@@ -2,6 +2,7 @@
 // over socket.io unchanged: the LocalShard implements it in-process today, the
 // Node server implements it later, and WorldView never knows the difference.
 import type { Res, StructureKind } from './defs';
+import type { CargoItem, ItemKind } from './ships/cargo';
 import type { Fit } from './ships/fitting';
 import type { HullId } from './ships/hulls';
 
@@ -70,12 +71,39 @@ export interface ChunkDelta {
  * to the target id. The shard already recomputes damage and range from the fit
  * with the shared fitting rules, so the client can't just claim a number.
  */
-export interface FireOrder {
-  target: number;
+export interface ShipReport {
   x: number;
   y: number;
   hull: HullId;
   fit: Fit;
+}
+
+export interface FireOrder extends ShipReport {
+  target: number;
+}
+
+/** Somewhere items live: one of the player's ship holds, or a Storage building. */
+export type Container = { ship: HullId; fit: Fit } | { storage: number };
+
+/**
+ * A cargo intent. The shard checks it with cargo.ts (fit, overlap, range to a
+ * Storage) and answers with fresh CargoState either way, so a client that
+ * applied it optimistically always ends up matching the shard.
+ */
+export type CargoOp =
+  | { op: 'move'; from: Container; uid: number; to: Container; x: number; y: number; rot: boolean }
+  | { op: 'jettison'; from: Container; uid: number };
+
+/** Everything the player owns in cargo: each hull's hold and each of their Storage buildings. */
+export interface CargoState {
+  holds: Record<HullId, CargoItem[]>;
+  stores: Record<number, CargoItem[]>;
+}
+
+export interface CacheResult extends BuildCheck {
+  loot?: ItemKind[];
+  /** Items that didn't fit in the hold and were left behind. */
+  lost?: number;
 }
 
 export interface PlayerState {
@@ -122,6 +150,7 @@ export interface SourceHandlers {
   player(p: PlayerState): void;
   overview(o: Overview): void;
   event(e: WorldEvent): void;
+  cargo(c: CargoState): void;
 }
 
 export interface WorldSource {
@@ -133,6 +162,9 @@ export interface WorldSource {
   demolish(col: number, row: number): Promise<BuildCheck>;
   /** Start firing at a structure, or stop with null. One target per shooter. */
   fire(order: FireOrder | null): Promise<BuildCheck>;
+  cargo(op: CargoOp, ship: ShipReport): Promise<BuildCheck>;
+  /** Crack open the cache tile at col,row into the ship's hold. */
+  openCache(col: number, row: number, ship: ShipReport): Promise<CacheResult>;
   /** Server clock in seconds. */
   now(): number;
 }
