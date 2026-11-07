@@ -8,6 +8,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+ARG VITE_AUTH_ENABLED=false
+ENV VITE_AUTH_ENABLED=$VITE_AUTH_ENABLED
 COPY . .
 RUN npm run build
 
