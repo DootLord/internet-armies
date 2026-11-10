@@ -1,5 +1,5 @@
 import { cargo, fleet, hud } from '../game/game';
-import { usedCells } from '../game/ships/cargo';
+import { usedCells } from '@eden/shared/ships/cargo';
 import { gridOf } from './CargoHold';
 import { useStore } from '../game/store';
 

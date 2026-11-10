@@ -1,0 +1,46 @@
+# Every push and pull request: typecheck and unit tests across all workspaces,
+# then build the real images, start the whole stack and play it end to end.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+
+  e2e:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Start the stack
+        run: docker compose up --build -d --wait
+      - name: Play
+        run: npx tsx scripts/smoke.ts play
+      - name: Survive a crash
+        run: |
+          docker compose kill -s KILL shard
+          docker compose up -d --wait shard
+          npx tsx scripts/smoke.ts restart
+      - name: Erase an account
+        run: npx tsx scripts/smoke.ts erase
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail=200

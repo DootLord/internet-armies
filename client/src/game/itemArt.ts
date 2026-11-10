@@ -3,10 +3,10 @@
 // layer. In the hold they sit at a three-quarter angle and sway under the cursor.
 // Model space as in ships/shapes.ts: x along the item's footprint width, y along
 // its height, z up; one unit = one art px (a cargo cell is 16 art px).
-import { ItemKind, ITEMS } from './ships/cargo';
+import { ItemKind, ITEMS } from '@eden/shared/ships/cargo';
 import { buildModel, Mat, renderFrame, ShipFrame, VoxelModel } from './ships/voxel';
-import { accentRamp, hex } from './palette';
-import { hash2 } from './rng';
+import { accentRamp, hex } from '@eden/shared/palette';
+import { hash2 } from '@eden/shared/rng';
 
 type Shape = (x: number, y: number, z: number) => Mat;
 interface ItemSpec { size: [number, number, number]; color: string; shape: Shape }

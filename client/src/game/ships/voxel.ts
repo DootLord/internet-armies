@@ -1,8 +1,8 @@
 // 2.5D ships: a small voxel model is ray-cast into pixel-art sprites at many
 // headings and bank angles, using the same camera, light and material ramps as
 // the hex world, so a ship reads as hand-drawn yet rotates consistently.
-import { accentRamp, C_AMBER, C_WHITE, CRY, mix, OUTLINE, RGB, ROCK, STEEL } from '../palette';
-import { bayer, hash2, mulberry32 } from '../rng';
+import { accentRamp, C_AMBER, C_WHITE, CRY, mix, OUTLINE, RGB, ROCK, STEEL } from '@eden/shared/palette';
+import { bayer, hash2, mulberry32 } from '@eden/shared/rng';
 import { Pix } from '../sprites';
 
 /** Scorch is never authored by shapes; damageModel() burns it into a hull. Rock is for cargo items like ore. */

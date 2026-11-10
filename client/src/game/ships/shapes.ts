@@ -1,6 +1,7 @@
 // Hull shapes as material functions over model space: x forward (nose +),
 // y right, z up; one unit = one art pixel before scaling. Each is ray-cast
 // into sprites by voxel.ts, so a new hull is just a new function here.
+import type { HullId } from '@eden/shared/ships/hulls';
 import { buildModel, damageModel, Mat, pickHits, VoxelModel } from './voxel';
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -204,7 +205,7 @@ export const SHAPES = {
   halberd: { shape: halberd, size: [84, 26, 22], engines: [[-40, 0, -1], [-40, -7, -1], [-40, 7, -1]], scale: 1.25 },
   bastion: { shape: bastion, size: [60, 32, 18], engines: [[-27.5, -3, -1], [-27.5, 3, -1], [-27.5, -11, -1], [-27.5, 11, -1]], scale: 1.15 },
   mule: { shape: mule, size: [52, 20, 12], engines: [[-24, -2, 0], [-24, 2, 0]], scale: 1.2 },
-} satisfies Record<string, ShapeSpec>;
+} satisfies Record<HullId, ShapeSpec>;
 export type ShapeId = keyof typeof SHAPES;
 
 const cache = new Map<string, VoxelModel>();

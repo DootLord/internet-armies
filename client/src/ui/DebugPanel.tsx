@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CS } from '../game/chunks';
+import { CS } from '@eden/shared/chunks';
 import { getEngine, world } from '../game/game';
 import { MAX_CACHED_CHUNKS, MAX_DETAIL_CHUNKS } from '../game/WorldView';
 

@@ -1,0 +1,22 @@
+{
+  "name": "@eden/kit",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@nats-io/transport-node": "^3.4.0",
+    "msgpackr": "^2.1.4",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  },
+  "exports": {
+    "./*": "./src/*.ts"
+  }
+}

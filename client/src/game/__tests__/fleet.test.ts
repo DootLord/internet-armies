@@ -1,18 +1,17 @@
 // The fleet on the shard: ships stationed at Hangars, boarding and refitting
 // only while docked, fits validated from scratch, and the Hangar's item bay.
 import { describe, expect, it } from 'vitest';
-import { PLAYER } from '../defs';
-import { tileX, tileY } from '../hex';
-import { emptyFit, withModule } from '../ships/fitting';
-import { DOCK_RANGE } from '../ships/fleet';
-import { HULLS } from '../ships/hulls';
-import { LocalShard } from '../sim/LocalShard';
-import { tileCenterX, tileCenterY } from '../terrain';
+import { tileX, tileY } from '@eden/shared/hex';
+import { emptyFit, withModule } from '@eden/shared/ships/fitting';
+import { DOCK_RANGE } from '@eden/shared/ships/fleet';
+import { HULLS } from '@eden/shared/ships/hulls';
+import { LocalShard } from '@eden/shared/sim/LocalShard';
+import { tileCenterX, tileCenterY } from '@eden/shared/terrain';
 import { WorldView } from '../WorldView';
 
 async function setup() {
   let t = 0;
-  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t });
+  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t, rivals: 1 });
   const view = new WorldView(shard);
   const advance = (seconds: number) => {
     for (let i = 0; i < seconds * 10; i++) {
@@ -21,13 +20,18 @@ async function setup() {
     }
   };
   await view.connect();
-  const home = view.meta!.homes[PLAYER];
+  const home = view.meta!.homes[view.me];
   view.update({ x: tileX(home.col, home.row) - 1500, y: tileY(home.row) - 900, w: 3000, h: 1800 }, 1000);
   advance(0.2);
-  const hangar = [...view.structures.values()].find((s) => s.kind === 'hangar' && s.owner === PLAYER)!;
+  const hangar = [...view.structures.values()].find((s) => s.kind === 'hangar' && s.owner === view.me)!;
   const docked = { x: tileCenterX(hangar.col, hangar.row), y: tileCenterY(hangar.row) + 30 };
   const away = { x: docked.x + DOCK_RANGE * 4, y: docked.y };
-  return { view, advance, hangar, docked, away };
+  // Fly there for real: the shard rejects positions the ship couldn't have reached in time.
+  const flyTo = (at: { x: number; y: number }) => {
+    advance(8);
+    view.report(at);
+  };
+  return { view, advance, flyTo, hangar, docked, away };
 }
 
 describe('fleet', () => {
@@ -40,9 +44,11 @@ describe('fleet', () => {
   });
 
   it('boards a stationed ship only while docked, leaving the old one in the Hangar', async () => {
-    const { view, advance, hangar, docked, away } = await setup();
+    const { view, advance, flyTo, hangar, docked, away } = await setup();
     const before = view.fleet!.flying, wisp = view.fleet!.ships.find((s) => s.hull === 'wisp')!;
+    flyTo(away);
     expect((await view.board(wisp.id, away)).ok).toBe(false);
+    flyTo(docked);
     expect((await view.board(wisp.id, docked)).ok).toBe(true);
     advance(0.2);
     expect(view.fleet!.flying).toBe(wisp.id);
@@ -50,10 +56,12 @@ describe('fleet', () => {
   });
 
   it('refits only while docked, and rejects fits that break the rules', async () => {
-    const { view, advance, docked, away } = await setup();
+    const { view, advance, flyTo, docked, away } = await setup();
     const me = view.fleet!.ships.find((s) => s.id === view.fleet!.flying)!;
     const lighter = withModule(emptyFit(me.hull), 'high', 0, 'pulse-laser');
+    flyTo(away);
     expect((await view.refit(me.id, lighter, away)).ok).toBe(false);
+    flyTo(docked);
     expect((await view.refit(me.id, withModule(lighter, 'mid', 0, 'pulse-laser'), docked)).ok).toBe(false); // weapon in a mid slot
     const greedy = { ...lighter, high: lighter.high.map(() => 'siege-lance') }; // far over power
     expect((await view.refit(me.id, greedy, docked)).ok).toBe(false);
@@ -65,7 +73,7 @@ describe('fleet', () => {
   it('moves items into the Hangar bay while docked', async () => {
     const { view, advance, hangar, docked } = await setup();
     // Grab loot from a cache near home first.
-    const home = view.meta!.homes[PLAYER];
+    const home = view.meta!.homes[view.me];
     let cache: [number, number] | null = null;
     for (let r = home.row - 8; r <= home.row + 8 && !cache; r++)
       for (let c = home.col - 8; c <= home.col + 8 && !cache; c++) if (view.kind(c, r) === 'cache') cache = [c, r];

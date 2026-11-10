@@ -1,13 +1,13 @@
 // Cargo rules (pure) and the shard's cache and Storage handling.
 import { describe, expect, it } from 'vitest';
-import { PLAYER, STRUCT } from '../defs';
-import { hexesInRadius, tileX, tileY } from '../hex';
-import { addItem, CACHE_RESPAWN, canPlace, cargoGrid, CargoItem, STORAGE_RANGE, usedCells } from '../ships/cargo';
-import { computeStats } from '../ships/fitting';
-import { starterFit } from '../ships/hangar';
-import { HULLS } from '../ships/hulls';
-import { LocalShard } from '../sim/LocalShard';
-import { tileCenterX, tileCenterY } from '../terrain';
+import { STRUCT } from '@eden/shared/defs';
+import { hexesInRadius, tileX, tileY } from '@eden/shared/hex';
+import { addItem, CACHE_RESPAWN, canPlace, cargoGrid, CargoItem, STORAGE_RANGE, usedCells } from '@eden/shared/ships/cargo';
+import { computeStats } from '@eden/shared/ships/fitting';
+import { starterFit } from '@eden/shared/ships/hangar';
+import { HULLS } from '@eden/shared/ships/hulls';
+import { LocalShard } from '@eden/shared/sim/LocalShard';
+import { tileCenterX, tileCenterY } from '@eden/shared/terrain';
 import { WorldView } from '../WorldView';
 
 describe('cargo grid', () => {
@@ -38,7 +38,7 @@ describe('cargo grid', () => {
 
 async function setup() {
   let t = 0;
-  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t });
+  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t, rivals: 1 });
   const view = new WorldView(shard);
   const advance = (seconds: number) => {
     for (let i = 0; i < seconds * 10; i++) {
@@ -47,7 +47,7 @@ async function setup() {
     }
   };
   await view.connect();
-  const home = view.meta!.homes[PLAYER];
+  const home = view.meta!.homes[view.me];
   view.update({ x: tileX(home.col, home.row) - 1500, y: tileY(home.row) - 900, w: 3000, h: 1800 }, 1000);
   advance(0.2);
   const ship = (col: number, row: number) => ({ x: tileCenterX(col, row), y: tileCenterY(row) + 20, hull: 'lancer' as const, fit: starterFit('lancer') });

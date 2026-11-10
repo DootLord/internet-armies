@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
-import { PLAYER, RES_KEYS, STRUCT, StructureKind } from '../game/defs';
+import { RES_KEYS, STRUCT, StructureKind } from '@eden/shared/defs';
 import { cargo, fleet, getEngine, hud, toast, world } from '../game/game';
-import { CX, CY, tileX, tileY } from '../game/hex';
-import { progressOf, Structure } from '../game/protocol';
-import { usedCells } from '../game/ships/cargo';
-import { autoSlot, canUnfit, computeStats, Fit, withModule } from '../game/ships/fitting';
-import { DOCK_RANGE, ShipRecord } from '../game/ships/fleet';
-import { HULL, Slot, SLOTS } from '../game/ships/hulls';
-import { MODULE, MODULES } from '../game/ships/modules';
+import { CX, CY, tileX, tileY } from '@eden/shared/hex';
+import { progressOf, Structure } from '@eden/shared/protocol';
+import { usedCells } from '@eden/shared/ships/cargo';
+import { autoSlot, canUnfit, computeStats, Fit, withModule } from '@eden/shared/ships/fitting';
+import { DOCK_RANGE, ShipRecord } from '@eden/shared/ships/fleet';
+import { HULL, Slot, SLOTS } from '@eden/shared/ships/hulls';
+import { MODULE, MODULES } from '@eden/shared/ships/modules';
 import { useStore } from '../game/store';
 import { bayOf, CargoBays, gridOf } from './CargoHold';
 import { ModuleIcon, ResIcon, SLOT_COLORS, UiIcon } from './icons';
@@ -54,7 +54,7 @@ function BaseOverview({ hangar }: { hangar: Structure }) {
   const state = useStore(cargo, (s) => s);
   const now = world.now(), hx = tileX(hangar.col, hangar.row) + CX, hy = tileY(hangar.row) + CY;
   const near = [...world.structures.values()].filter(
-    (s) => s.owner === PLAYER && Math.hypot(tileX(s.col, s.row) + CX - hx, tileY(s.row) + CY - hy) <= BASE_RADIUS,
+    (s) => s.owner === world.me && Math.hypot(tileX(s.col, s.row) + CX - hx, tileY(s.row) + CY - hy) <= BASE_RADIUS,
   );
   const counts = new Map<StructureKind, number>();
   const rates: Record<string, number> = {};

@@ -1,0 +1,115 @@
+# The whole backend on one machine: `docker compose up --build`, then open
+# http://localhost:8080. The same images run on Coolify (which deploys this
+# file) and, in the next phase, on Kubernetes.
+#
+#   browser ─► web (nginx) ─┬─ /            static client
+#                           ├─ /auth/*      accounts ─┐
+#                           └─ /socket.io   gateway ×2 ┼─ NATS ─ shard ─ Postgres
+#                                                     └──────────────────┘
+name: eden
+
+x-node: &node
+  restart: unless-stopped
+  init: true # a tiny PID 1 that forwards SIGTERM, so shutdown hooks run
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: eden
+      POSTGRES_USER: eden
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-eden-dev}
+      ACCOUNTS_DB_PASSWORD: ${ACCOUNTS_DB_PASSWORD:-accounts-dev}
+      SHARD_DB_PASSWORD: ${SHARD_DB_PASSWORD:-shard-dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    ports:
+      - 127.0.0.1:5432:5432 # for psql / a DB GUI from the host; never public
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U eden -d eden]
+      interval: 5s
+      retries: 10
+
+  nats:
+    image: nats:2.11-alpine
+    restart: unless-stopped
+    command: [--http_port, '8222'] # monitoring endpoints: /varz, /connz, /subsz
+    ports:
+      - 127.0.0.1:8222:8222
+    healthcheck:
+      test: [CMD, wget, -qO-, http://localhost:8222/healthz]
+      interval: 5s
+      retries: 10
+
+  accounts:
+    <<: *node
+    build: { context: ., dockerfile: services/Dockerfile, args: { SERVICE: accounts } }
+    environment:
+      DATABASE_URL: postgres://accounts_svc:${ACCOUNTS_DB_PASSWORD:-accounts-dev}@postgres:5432/eden
+      NATS_URL: nats://nats:4222
+      PORT: '3001'
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID:-}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3001/readyz]
+      interval: 5s
+      retries: 10
+
+  shard:
+    <<: *node
+    build: { context: ., dockerfile: services/Dockerfile, args: { SERVICE: shard } }
+    environment:
+      DATABASE_URL: postgres://shard_svc:${SHARD_DB_PASSWORD:-shard-dev}@postgres:5432/eden
+      NATS_URL: nats://nats:4222
+      PORT: '3002'
+      SECTOR: '1'
+      SEED: '20261029'
+      RADIUS_PX: '14000'
+    # Stateful and single-writer: exactly one per sector. Give it time for the final save.
+    stop_grace_period: 30s
+    depends_on:
+      postgres: { condition: service_healthy }
+      nats: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3002/readyz]
+      interval: 5s
+      retries: 10
+
+  gateway:
+    <<: *node
+    build: { context: ., dockerfile: services/Dockerfile, args: { SERVICE: gateway } }
+    environment:
+      NATS_URL: nats://nats:4222
+      ACCOUNTS_URL: http://accounts:3001
+      PORT: '3000'
+      SECTOR: '1'
+    # Stateless: run as many as you like (docker compose up --scale gateway=4).
+    deploy:
+      replicas: 2
+    depends_on:
+      accounts: { condition: service_healthy }
+      shard: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/readyz]
+      interval: 5s
+      retries: 10
+
+  web:
+    build: { context: ., dockerfile: client/Dockerfile }
+    restart: unless-stopped
+    ports:
+      - ${WEB_PORT:-8080}:80
+    depends_on:
+      - accounts
+      - gateway
+
+volumes:
+  pgdata:

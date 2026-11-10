@@ -3,9 +3,9 @@
 // post pass (bloom, light map, grade). Stone stacks are little raised blocks
 // with their strata showing on the cut faces, so digging reads as depth.
 import { itemColor, itemSprite } from '../itemArt';
-import { accentRamp, C_AMBER, css, hex, mix, OUTLINE, ramp, RGB, ROCK } from '../palette';
+import { accentRamp, C_AMBER, css, hex, mix, OUTLINE, ramp, RGB, ROCK } from '@eden/shared/palette';
 import { Post } from '../post';
-import { hash2 } from '../rng';
+import { hash2 } from '@eden/shared/rng';
 import { assets } from '../sprites';
 import { BurnResult, COLS, DEPTH, Dig, Find, ROWS, Stone, STONE, Tool } from './excavation';
 

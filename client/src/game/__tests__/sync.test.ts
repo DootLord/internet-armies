@@ -1,20 +1,26 @@
-// End-to-end streaming test: a shard runs its AI for a while, and every chunk
-// the client is subscribed to must match the shard exactly.
+// End-to-end streaming test: rival empires keep building for a while, and every
+// chunk the client is subscribed to must match the shard exactly.
 import { describe, expect, it } from 'vitest';
-import { CS, localIndex } from '../chunks';
-import { PLAYER } from '../defs';
-import { tileX, tileY } from '../hex';
-import type { ChunkDelta, SourceHandlers, WorldSource } from '../protocol';
-import { LocalShard } from '../sim/LocalShard';
+import { CS, localIndex } from '@eden/shared/chunks';
+import { tileX, tileY } from '@eden/shared/hex';
+import type { ChunkDelta, SourceHandlers, WorldSource } from '@eden/shared/protocol';
+import { LocalShard } from '@eden/shared/sim/LocalShard';
 import { WorldView } from '../WorldView';
 
 function setup(wrap?: (s: LocalShard) => WorldSource) {
   let t = 0;
-  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t });
+  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t, rivals: 3 });
   const view = new WorldView(wrap ? wrap(shard) : shard);
+  // Rivals push their borders out with a Claim Relay every couple of seconds, so chunks keep changing.
+  let n = 0;
   const advance = (seconds: number) => {
     for (let i = 0; i < seconds * 10; i++) {
       t += 0.1;
+      if (++n % 20 === 0)
+        for (const r of shard.rivals) {
+          const fr = shard.sector.frontier(r);
+          if (fr.length) shard.sector.place('relay', ...fr[n % fr.length], r, false);
+        }
       shard.step(0.1);
     }
   };
@@ -49,7 +55,7 @@ describe('chunk streaming', () => {
   it('client chunks converge to shard state while the world changes', async () => {
     const { shard, view, advance } = setup();
     await view.connect();
-    for (let f = 1; f < 4; f++) {
+    for (const f of shard.rivals) {
       lookAt(view, f);
       advance(60);
       expectInSync(view, shard);
@@ -61,8 +67,8 @@ describe('chunk streaming', () => {
   it('player builds round-trip through the shard', async () => {
     const { shard, view, advance } = setup();
     await view.connect();
-    lookAt(view, PLAYER);
-    const home = view.meta!.homes[PLAYER];
+    lookAt(view, view.me);
+    const home = view.meta!.homes[view.me];
     // Find an empty owned tile next to the Nexus.
     let spot: [number, number] | null = null;
     for (let dr = -2; dr <= 2 && !spot; dr++)
@@ -75,7 +81,7 @@ describe('chunk streaming', () => {
     expect(res.ok).toBe(true);
     advance(0.2);
     expect(view.structure(...spot!)?.kind).toBe('solar');
-    expect(view.structure(...spot!)?.owner).toBe(PLAYER);
+    expect(view.structure(...spot!)?.owner).toBe(view.me);
     expectInSync(view, shard);
   });
 
@@ -100,10 +106,11 @@ describe('chunk streaming', () => {
       board: (id, sh) => s.board(id, sh),
       refit: (id, f, sh) => s.refit(id, f, sh),
       deploy: (b, t) => s.deploy(b, t),
+      report: (sh) => s.report(sh),
       now: () => s.now(),
     }));
     await view.connect();
-    lookAt(view, 1);
+    lookAt(view, shard.rivals[0]);
     advance(5);
     dropNext = true;
     advance(90);

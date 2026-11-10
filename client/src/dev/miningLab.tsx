@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { NODE, NodeKind } from '../game/mining/excavation';
-import { ItemKind, ITEMS } from '../game/ships/cargo';
+import { ItemKind, ITEMS } from '@eden/shared/ships/cargo';
 import { MiningWindow } from '../ui/MiningWindow';
 import { installSkin } from '../ui/skin';
 import '../styles.css';

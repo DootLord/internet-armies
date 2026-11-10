@@ -1,8 +1,6 @@
 // Hull definitions: what each ship *is* before fitting. Base attributes feed
 // fitting.ts, which applies modules and produces the final ship stats.
-import { FACTIONS } from '../defs';
-import { ShapeId, shipModel } from './shapes';
-import { ShipSprites } from './voxel';
+export type HullId = 'wisp' | 'lancer' | 'regent' | 'bastion' | 'halberd' | 'mule';
 
 export type Slot = 'high' | 'mid' | 'low';
 export const SLOTS: Slot[] = ['high', 'mid', 'low'];
@@ -27,7 +25,7 @@ export interface ShipAttrs {
 export type AttrKey = keyof ShipAttrs;
 
 export interface HullDef {
-  id: ShapeId;
+  id: HullId;
   name: string;
   class: string;
   role: string;
@@ -80,14 +78,4 @@ export const HULLS: HullDef[] = [
     alt: 18, shadow: 18,
   },
 ];
-export const HULL = Object.fromEntries(HULLS.map((h) => [h.id, h])) as Record<ShapeId, HullDef>;
-export type HullId = ShapeId;
-
-const sprites = new Map<string, ShipSprites>();
-/** Shared, lazily-rendered sprite cache per hull, faction and damage stage (engine + UI previews). */
-export function hullSprites(id: HullId, faction = 0, stage = 0) {
-  const key = `${id}:${faction}:${stage}`;
-  let s = sprites.get(key);
-  if (!s) sprites.set(key, (s = new ShipSprites(shipModel(id, stage), FACTIONS[faction].rgb)));
-  return s;
-}
+export const HULL = Object.fromEntries(HULLS.map((h) => [h.id, h])) as Record<HullId, HullDef>;

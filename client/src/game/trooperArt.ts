@@ -4,7 +4,8 @@
 // is what gives the armour smooth, ship-like shading. Five poses: standing
 // (also firing) and a four-step walk with the free arm swinging.
 // Model space as in ships/shapes.ts: x forward, y to the side (+y right), z up.
-import { FACTIONS } from './defs';
+import { FACTIONS } from '@eden/shared/defs';
+import { colorOf } from './empires';
 import { buildModel, Mat, PITCH_COS, ShipSprites, VoxelModel, YAW_STEPS } from './ships/voxel';
 
 /** Voxels per design unit. */
@@ -138,9 +139,9 @@ export function mechModel(pose: number) {
 }
 
 export function trooperFrame(owner: number, pose: number, yaw: number) {
-  const key = owner * POSES.length + pose;
+  const key = colorOf(owner) * POSES.length + pose;
   let s = sprites.get(key);
-  if (!s) sprites.set(key, (s = new ShipSprites(mechModel(pose), FACTIONS[owner].rgb)));
+  if (!s) sprites.set(key, (s = new ShipSprites(mechModel(pose), FACTIONS[colorOf(owner)].rgb)));
   const step = YAW_STEPS / DIRS, i = ((Math.round((yaw / (Math.PI * 2)) * DIRS) % DIRS) + DIRS) % DIRS;
   return { frame: s.frame(i * step, 0), half: s.size / 2, yaw: (i / DIRS) * Math.PI * 2 };
 }

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { cargo, fleet, flyingShip, hud, world } from '../game/game';
-import { STORAGE_RANGE } from '../game/ships/cargo';
-import { HULL } from '../game/ships/hulls';
+import { STORAGE_RANGE } from '@eden/shared/ships/cargo';
+import { HULL } from '@eden/shared/ships/hulls';
 import { useStore } from '../game/store';
 import { bayOf, CargoBays } from './CargoHold';
 import { UiIcon } from './icons';

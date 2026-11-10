@@ -1,10 +1,10 @@
 import { CSSProperties, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cargo, fleet, getEngine, toast, world } from '../game/game';
-import type { CargoOp, CargoState, Container } from '../game/protocol';
-import { canPlace, CARGO_COLS, cargoGrid, CargoItem, footprint, Grid, inGrid, insertItem, ItemKind, ITEMS, moveItem, removeItem, STORAGE_GRID, usedCells } from '../game/ships/cargo';
-import { computeStats } from '../game/ships/fitting';
-import { HANGAR_GRID } from '../game/ships/fleet';
+import type { CargoOp, CargoState, Container } from '@eden/shared/protocol';
+import { canPlace, CARGO_COLS, cargoGrid, CargoItem, footprint, Grid, inGrid, insertItem, ItemKind, ITEMS, moveItem, removeItem, STORAGE_GRID, usedCells } from '@eden/shared/ships/cargo';
+import { computeStats } from '@eden/shared/ships/fitting';
+import { HANGAR_GRID } from '@eden/shared/ships/fleet';
 import { itemPose, itemSpan } from '../game/itemArt';
 
 /** One grid on screen: a ship hold or a Storage. `locked` explains why it can't be touched right now. */

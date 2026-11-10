@@ -8,8 +8,8 @@
 //   finds: items lying on the bedrock under the stacks. A find is pulled free
 //          once FREE_AT of the cells over it are clear, and lost if the
 //          Cutter's core is held on it too long (the Precision beam is safe).
-import { ItemKind } from '../ships/cargo';
-import { hash2, mulberry32 } from '../rng';
+import { ItemKind } from '@eden/shared/ships/cargo';
+import { hash2, mulberry32 } from '@eden/shared/rng';
 
 export type NodeKind = 'ore' | 'crystal' | 'ruin';
 export type Stone = 'regolith' | 'basalt' | 'obsidian';

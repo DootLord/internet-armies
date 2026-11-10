@@ -1,0 +1,21 @@
+{
+  "name": "@eden/shared",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Game rules and the client <-> shard protocol, shared by the browser and every server.",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "msgpackr": "^2.1.4"
+  }
+}

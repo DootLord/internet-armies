@@ -1,8 +1,8 @@
 // Pieces shared by the ship panel (read-only) and the Hangar (editable):
 // slot rows, CPU/power budgets and the stats strip.
-import { Fit, ShipStats } from '../game/ships/fitting';
-import { HullId, Slot, SLOTS } from '../game/ships/hulls';
-import { MODULE } from '../game/ships/modules';
+import { Fit, ShipStats } from '@eden/shared/ships/fitting';
+import { HullId, Slot, SLOTS } from '@eden/shared/ships/hulls';
+import { MODULE } from '@eden/shared/ships/modules';
 import { ModuleIcon, SLOT_COLORS } from './icons';
 
 export const SLOT_NAME: Record<Slot, string> = { high: 'High', mid: 'Mid', low: 'Low' };

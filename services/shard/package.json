@@ -1,0 +1,15 @@
+{
+  "name": "@eden/shard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/main.ts",
+    "build": "node ../build.mjs",
+    "start": "node dist/main.js",
+    "typecheck": "tsc",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {"@eden/kit": "*", "@eden/shared": "*", "zod": "^4.6.7"},
+  "devDependencies": {}
+}

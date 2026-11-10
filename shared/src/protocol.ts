@@ -150,6 +150,27 @@ export interface Overview {
   version: number;
 }
 
+/**
+ * The overview as it travels: only owned cells, as [cell, owner] pairs. Most
+ * of the disc is unowned, so this is a few KB instead of the dense grid's
+ * hundreds; the receiving side expands it with expandOverview().
+ */
+export interface OverviewWire {
+  x0: number;
+  y0: number;
+  cell: number;
+  w: number;
+  h: number;
+  cells: Int32Array;
+  version: number;
+}
+
+export function expandOverview(o: OverviewWire): Overview {
+  const owner = new Int32Array(o.w * o.h).fill(-1);
+  for (let i = 0; i < o.cells.length; i += 2) owner[o.cells[i]] = o.cells[i + 1];
+  return { x0: o.x0, y0: o.y0, cell: o.cell, w: o.w, h: o.h, owner, version: o.version };
+}
+
 export interface WorldEvent {
   id: number;
   cycle: number;
@@ -160,12 +181,59 @@ export interface WorldEvent {
   row?: number;
 }
 
+/** A player's empire as everyone else sees it: owner ids on tiles and structures are empire ids. */
+export interface EmpireInfo {
+  id: number;
+  name: string;
+  /** Index into the faction colour palette (FACTIONS). */
+  color: number;
+}
+
 export interface WorldMeta {
   seed: number;
   /** Radius of the playable disc in world pixels. Can grow over time. */
   radiusPx: number;
-  homes: { col: number; row: number }[];
+  /** Home Nexus tiles by empire id. Always holds your own. */
+  homes: Record<number, { col: number; row: number }>;
+  /** Your empire id. */
   player: number;
+  /** Where your flagship was when you last left (the shard's validated position). */
+  ship: ShipReport;
+  /** Server clock (seconds) when this was sent, for the client's clock sync. */
+  now: number;
+}
+
+/**
+ * Everything the shard pushes, as one tagged union. The server sends these
+ * over the message bus and the socket unchanged; both WorldSources turn them
+ * into SourceHandlers calls with dispatch().
+ */
+export type Push =
+  | { t: 'chunks'; list: ChunkSnapshot[] }
+  | { t: 'delta'; d: ChunkDelta }
+  | { t: 'player'; p: PlayerState }
+  | { t: 'overview'; o: OverviewWire }
+  | { t: 'event'; e: WorldEvent }
+  | { t: 'cargo'; c: CargoState }
+  | { t: 'fleet'; f: FleetState }
+  | { t: 'squads'; changed: Squad[]; gone: number[] }
+  | { t: 'empires'; list: EmpireInfo[] }
+  /** Your reported position was impossible: the shard puts the ship back here. */
+  | { t: 'correct'; x: number; y: number };
+
+export function dispatch(h: SourceHandlers, m: Push) {
+  switch (m.t) {
+    case 'chunks': for (const s of m.list) h.chunk(s); break;
+    case 'delta': h.delta(m.d); break;
+    case 'player': h.player(m.p); break;
+    case 'overview': h.overview(expandOverview(m.o)); break;
+    case 'event': h.event(m.e); break;
+    case 'cargo': h.cargo(m.c); break;
+    case 'fleet': h.fleet(m.f); break;
+    case 'squads': h.squads(m.changed, m.gone); break;
+    case 'empires': h.empires(m.list); break;
+    case 'correct': h.correct({ x: m.x, y: m.y }); break;
+  }
 }
 
 export interface SourceHandlers {
@@ -178,6 +246,10 @@ export interface SourceHandlers {
   fleet(f: FleetState): void;
   /** Squads that appeared or changed, and ids that are gone (killed or stood down). */
   squads(changed: Squad[], gone: number[]): void;
+  /** Names and colours for empire ids (new players, renames). */
+  empires(list: EmpireInfo[]): void;
+  /** The shard rejected a reported position and put the flagship back here. */
+  correct(at: ShipReport): void;
 }
 
 export interface WorldSource {
@@ -198,6 +270,8 @@ export interface WorldSource {
   refit(shipId: number, fit: Fit, ship: ShipReport): Promise<BuildCheck>;
   /** Send a squad from one of your Mech Bays to assault an enemy structure. */
   deploy(bay: number, target: number): Promise<BuildCheck>;
+  /** Where the flagship is, a few times a second. The shard checks it against the hull's top speed. */
+  report(ship: ShipReport): void;
   /** Server clock in seconds. */
   now(): number;
 }

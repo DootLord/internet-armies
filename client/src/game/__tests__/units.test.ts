@@ -1,12 +1,12 @@
 // Ground troops: routes as functions of time, squads marching on and
 // destroying a target, and Pulse Batteries cutting them down.
 import { describe, expect, it } from 'vitest';
-import { PLAYER, STRUCT, StructureKind } from '../defs';
-import { hexDist, hexesInRadius, tileX, tileY } from '../hex';
-import { hpOf, Squad, Structure } from '../protocol';
-import { LocalShard } from '../sim/LocalShard';
-import { VOID } from '../terrain';
-import { aliveOf, findPath, SQUAD_COST, squadAt, TROOPER_HP } from '../units';
+import { STRUCT, StructureKind } from '@eden/shared/defs';
+import { hexDist, hexesInRadius, tileX, tileY } from '@eden/shared/hex';
+import { hpOf, Squad, Structure } from '@eden/shared/protocol';
+import { LocalShard } from '@eden/shared/sim/LocalShard';
+import { VOID } from '@eden/shared/terrain';
+import { aliveOf, findPath, SQUAD_COST, squadAt, TROOPER_HP } from '@eden/shared/units';
 import { WorldView } from '../WorldView';
 
 describe('routes', () => {
@@ -40,7 +40,7 @@ describe('routes', () => {
 
 async function setup() {
   let t = 0;
-  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t });
+  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t, rivals: 1 });
   const view = new WorldView(shard);
   const advance = (seconds: number) => {
     for (let i = 0; i < seconds * 10; i++) {
@@ -49,10 +49,10 @@ async function setup() {
     }
   };
   await view.connect();
-  const home = view.meta!.homes[PLAYER];
+  const home = view.meta!.homes[view.me];
   view.update({ x: tileX(home.col, home.row) - 1500, y: tileY(home.row) - 900, w: 3000, h: 1800 }, 1000);
   advance(0.2);
-  const internal = shard as unknown as { place(k: StructureKind, c: number, r: number, f: number, instant: boolean): void; structure(c: number, r: number): Structure };
+  const internal = shard.sector, rival = shard.rivals[0];
   // Free land near home, away from the Nexus.
   const free = hexesInRadius(home.col, home.row, 9).filter(([c, r]) => shard.kindId(c, r) !== VOID && !shard.structure(c, r) && hexDist(c, r, home.col, home.row) >= 3);
   const bayAt = free.find(([c, r]) => view.canBuild('mechbay', c, r).ok)!;
@@ -61,16 +61,16 @@ async function setup() {
   const bay = view.structure(...bayAt)!;
   // An enemy building a short march away, placed directly on the shard.
   const spot = free.find(([c, r]) => hexDist(c, r, ...bayAt) >= 5 && !shard.structure(c, r))!;
-  internal.place('solar', ...spot, 1, true);
+  internal.place('solar', ...spot, rival, true);
   shard.flush();
-  const target = internal.structure(...spot);
-  return { shard, view, advance, internal, free, bay, target, spot };
+  const target = internal.structure(...spot)!;
+  return { shard, view, advance, internal, rival, free, bay, target, spot };
 }
 
 describe('squads', () => {
   it('deploys only from a finished Mech Bay at an enemy, charging the cost and cooling down', async () => {
     const { view, bay, target, advance } = await setup();
-    const nexus = [...view.structures.values()].find((s) => s.kind === 'nexus' && s.owner === PLAYER)!;
+    const nexus = [...view.structures.values()].find((s) => s.kind === 'nexus' && s.owner === view.me)!;
     expect((await view.deploy(bay.id, nexus.id)).ok).toBe(false);
     const credits = view.player.res.credits;
     expect((await view.deploy(bay.id, target.id)).ok).toBe(true);
@@ -91,9 +91,9 @@ describe('squads', () => {
   });
 
   it('is cut down by a Pulse Battery guarding the target', async () => {
-    const { view, advance, bay, target, spot, internal, shard, free } = await setup();
+    const { view, advance, bay, target, spot, internal, rival, shard, free } = await setup();
     const guard = free.find(([c, r]) => hexDist(c, r, ...spot) === 1 && !shard.structure(c, r))!;
-    internal.place('turret', ...guard, 1, true);
+    internal.place('turret', ...guard, rival, true);
     shard.flush();
     await view.deploy(bay.id, target.id);
     advance(0.2);

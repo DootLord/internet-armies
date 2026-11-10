@@ -1,8 +1,9 @@
 // Dev-only: renders every hull at a spread of headings for art iteration.
 // Open http://localhost:5173/ships.html while `npm run dev` is running.
-import { HULLS, hullSprites } from '../game/ships/hulls';
+import { HULLS } from '@eden/shared/ships/hulls';
+import { hullSprites } from '../game/ships/hullArt';
 import { YAW_STEPS } from '../game/ships/voxel';
-import { ItemKind, ITEMS } from '../game/ships/cargo';
+import { ItemKind, ITEMS } from '@eden/shared/ships/cargo';
 import { itemPose, itemSpan } from '../game/itemArt';
 import { trooperFrame } from '../game/trooperArt';
 

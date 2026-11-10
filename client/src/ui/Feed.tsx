@@ -1,4 +1,4 @@
-import { FACTIONS } from '../game/defs';
+import { faction } from '../game/empires';
 import { getEngine, hud } from '../game/game';
 import { useStore } from '../game/store';
 
@@ -8,7 +8,7 @@ export function Feed() {
   return (
     <ol className="log">
       {feed.slice(0, 6).map((ev, i) => {
-        const f = ev.faction >= 0 ? FACTIONS[ev.faction] : null;
+        const f = ev.faction >= 0 ? faction(ev.faction) : null;
         const jump = ev.col !== undefined ? () => getEngine()?.focusTile(ev.col!, ev.row!) : undefined;
         return (
           <li key={ev.id} className={`log-line ${jump ? 'link' : ''} ${f ? '' : 'sys'}`} style={{ opacity: 1 - i * 0.13 }} onClick={jump}>

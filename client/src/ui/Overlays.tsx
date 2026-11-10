@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { FACTIONS, STRUCT, TILE_INFO } from '../game/defs';
+import { STRUCT, TILE_INFO } from '@eden/shared/defs';
+import { faction } from '../game/empires';
 import { hud } from '../game/game';
 import { useStore } from '../game/store';
 
@@ -17,7 +18,7 @@ export function Tooltip() {
     return () => window.removeEventListener('pointermove', move);
   }, []);
 
-  const owner = hover && hover.owner >= 0 ? FACTIONS[hover.owner] : null;
+  const owner = hover && hover.owner >= 0 ? faction(hover.owner) : null;
   const s = hover?.structure;
   return (
     <div ref={ref} className={`tooltip f-tip ${hover && !aim ? 'show' : ''}`}>

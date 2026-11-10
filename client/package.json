@@ -1,5 +1,5 @@
 {
-  "name": "eden-client",
+  "name": "@eden/client",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -12,8 +12,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@eden/shared": "*",
+    "msgpackr": "^2.1.4",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

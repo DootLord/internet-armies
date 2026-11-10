@@ -1,23 +1,38 @@
 # Eden
 
-A persistent, single-shard sci-fi territory builder: every player builds on the same hex cluster.
+A persistent sci-fi territory builder: every player builds on the same hex cluster.
 
 ## Layout
 
-```
-client/   React + Vite + TypeScript front end (WebGL2 renderer)
-server/   (next) Node + Express + socket.io authoritative world
-```
-
-## Run the client
+An npm-workspaces monorepo. Architecture and the reasoning behind it: [docs/design/backend.md](docs/design/backend.md).
 
 ```
-cd client
+shared/             game rules, the simulation (Sector) and the wire protocol, used by browser and servers
+client/             React + Vite + TypeScript front end (WebGL2 renderer)
+services/accounts   sign-in (guest, Discord, Google), sessions, access tokens
+services/gateway    WebSocket edge: verifies tokens, bridges sockets to NATS
+services/shard      the authoritative sector: simulation + Postgres persistence
+services/kit        shared server plumbing (logs, config, migrations, probes, NATS subjects)
+scripts/smoke.ts    end-to-end test against a running stack
+```
+
+## Run it
+
+```
 npm install
-npm run dev        # http://localhost:5173
+docker compose up --build      # the whole stack on http://localhost:8080
+npm run dev -w @eden/client    # optional: hot-reloading client on :5173, talking to the stack above
 ```
 
-Deep links: `?at=col,row&zoom=4`, or `?at=f2` to jump to a faction's home.
+`?offline` runs a whole sector inside the page instead (no backend; rival empires sit idle).
+Deep links: `?at=col,row&zoom=4`. Copy `.env.example` to `.env` for real passwords and OAuth keys.
+
+Checks:
+
+```
+npm run typecheck && npm test        # every workspace
+npx tsx scripts/smoke.ts play        # against the running stack (also: restart, erase)
+```
 
 ## How rendering works
 
@@ -33,13 +48,14 @@ Deep links: `?at=col,row&zoom=4`, or `?at=f2` to jump to a faction's home.
 One persistent map, streamed like Minecraft. Defaults: a disc of ~0.9M hex slots (`?radius=` in world px to
 stress-test), 32×32-hex chunks.
 
-- `game/protocol.ts` is the client ↔ shard contract (`WorldSource`): subscribe to chunk keys, receive a
+- `shared/src/protocol.ts` is the client ↔ shard contract (`WorldSource`): subscribe to chunk keys, receive a
   snapshot then revisioned, idempotent deltas. The client resyncs a chunk if a revision is skipped.
-- `game/terrain.ts` is deterministic terrain shared by both sides, so the shard only sends what players
+- `shared/src/terrain.ts` is deterministic terrain shared by both sides, so the shard only sends what players
   changed (ownership, structures, terrain overrides), never terrain itself.
-- `game/rules.ts` holds build validation shared by client (instant feedback) and shard (authoritative).
-- `game/sim/LocalShard.ts` is the in-process stand-in for the Node shard: sparse state, AI factions,
-  timestamp-based construction, per-chunk delta batching, simulated latency. No DOM.
+- `shared/src/rules.ts` holds build validation shared by client (instant feedback) and shard (authoritative).
+- `shared/src/sim/Sector.ts` is the authoritative simulation for any number of empires: sparse state,
+  timestamp-based construction and health, per-chunk delta batching, dirty tracking for persistence. No I/O.
+  The shard service runs it behind NATS and Postgres; `LocalShard` runs it in-process for tests and `?offline`.
 - `game/WorldView.ts` is the client chunk cache: viewport subscriptions with hysteresis, nearest-first
   terrain generation under a frame budget, LRU eviction, revision checks. No DOM, so it's unit tested.
 - `game/render/maps.ts` covers the zoomed-out levels of detail: baked per-chunk map images, and a whole-world

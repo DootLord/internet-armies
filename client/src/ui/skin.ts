@@ -5,7 +5,7 @@
 // Like world sprites, every frame has companion layers:
 //   --fs-*  shine mask (lit bevel pixels) that a moving band sweeps across
 //   --fg-*  emissive pixels, blurred in CSS to fake the game's bloom
-import { accentRamp, C_WHITE, hex, mix, OUTLINE, RGB, STEEL } from '../game/palette';
+import { accentRamp, C_WHITE, hex, mix, OUTLINE, RGB, STEEL } from '@eden/shared/palette';
 import { Pix } from '../game/sprites';
 
 interface Ring { light: RGB; dark: RGB; mid?: RGB }

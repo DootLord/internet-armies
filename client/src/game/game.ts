@@ -1,9 +1,10 @@
-import { emptyRes, Res, StructureKind, TileKind } from './defs';
+import { emptyRes, Res, StructureKind, TileKind } from '@eden/shared/defs';
 import type { Engine } from './engine';
-import type { CargoState, WorldEvent } from './protocol';
-import type { FleetState, ShipRecord } from './ships/fleet';
-import type { Vitals } from './ships/vitals';
-import { LocalShard } from './sim/LocalShard';
+import type { CargoState, WorldEvent, WorldSource } from '@eden/shared/protocol';
+import type { FleetState, ShipRecord } from '@eden/shared/ships/fleet';
+import type { Vitals } from '@eden/shared/ships/vitals';
+import { LocalShard } from '@eden/shared/sim/LocalShard';
+import { RemoteSource } from './net/RemoteSource';
 import { createStore } from './store';
 import { WorldView } from './WorldView';
 
@@ -51,9 +52,13 @@ export interface HudState {
   ship: Vitals & { refuelling: boolean; repairing: boolean; wrecked: boolean; firing: boolean };
 }
 
-// ?radius=40000 (world px) for stress tests; the default disc is ~0.9M hex slots.
+// The live world comes from the server. ?offline runs a whole sector inside the
+// page instead (no backend needed; ?radius=40000 world px for stress tests).
 const q = new URLSearchParams(location.search);
-export const source = new LocalShard({ seed: 20261029, radiusPx: Number(q.get('radius')) || 14000, latencyMs: Number(q.get('latency') ?? 60) });
+export const offline = q.has('offline');
+export const source: WorldSource = offline
+  ? new LocalShard({ seed: 20261029, radiusPx: Number(q.get('radius')) || 14000, latencyMs: Number(q.get('latency') ?? 60), rivals: 4 })
+  : new RemoteSource();
 export const world = new WorldView(source);
 
 export const hud = createStore<HudState>({

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { itemPose } from '../game/itemArt';
 import { Dig, FREE_AT, MAX_CHARGE, NODE, NodeKind, Tool, TOOLS } from '../game/mining/excavation';
 import { DIG_H, DIG_W, DigRenderer, pickCell } from '../game/mining/digRender';
-import { ItemKind, ITEMS } from '../game/ships/cargo';
+import { ItemKind, ITEMS } from '@eden/shared/ships/cargo';
 import { UiIcon } from './icons';
 
 /** What the HUD needs from the dig, refreshed a few times a second (the canvas runs every frame). */

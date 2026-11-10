@@ -1,26 +1,28 @@
-import { BUILDABLE, FACTIONS, STRUCT, StructureKind, TileKind } from './defs';
+import { BUILDABLE, STRUCT, StructureKind, TileKind } from '@eden/shared/defs';
+import { colorOf, faction } from './empires';
 import { fleet, flyingShip, HudState, TileSnap, toast } from './game';
-import { CX, CY, neighbor, pick, RH, TW, tileX, tileY } from './hex';
+import { CX, CY, neighbor, pick, RH, TW, tileX, tileY } from '@eden/shared/hex';
 import { Post } from './post';
 import { assets, fractureSprite, SOX, SOY, SpriteShard, STAR_DOMAIN, TILE_PAD } from './sprites';
 import { Store } from './store';
-import { Chunk, CHUNK_PX_H, CHUNK_PX_W, CS_BITS, localIndex, pack } from './chunks';
-import { KINDS, VOID } from './terrain';
-import { hpOf, progressOf, ShipReport, Squad, Structure } from './protocol';
-import { aliveOf, DEPLOY_COOLDOWN, routeDots, squadAt, squadMaxHp, trooperOffset } from './units';
+import { Chunk, CHUNK_PX_H, CHUNK_PX_W, CS_BITS, localIndex, pack } from '@eden/shared/chunks';
+import { KINDS, VOID } from '@eden/shared/terrain';
+import { hpOf, progressOf, ShipReport, Squad, Structure } from '@eden/shared/protocol';
+import { aliveOf, DEPLOY_COOLDOWN, routeDots, squadAt, squadMaxHp, trooperOffset } from '@eden/shared/units';
 import { mechModel, MUZZLE, TROOPER_CHEST, TROOPER_HALF_W, TROOPER_HEIGHT, TROOPER_LIFT, trooperFrame, WALK, warmMechs } from './trooperArt';
 import { ChunkMaps, OV_H, OV_W, WorldMap } from './render/maps';
-import { clamp, hash2, smoothstep } from './rng';
+import { clamp, hash2, smoothstep } from '@eden/shared/rng';
 import type { WorldView } from './WorldView';
-import { computeStats, flightParams, weaponStats } from './ships/fitting';
-import { starterFit } from './ships/hangar';
-import { HULL, HullDef, hullSprites } from './ships/hulls';
+import { computeStats, flightParams, weaponStats } from '@eden/shared/ships/fitting';
+import { starterFit } from '@eden/shared/ships/hangar';
+import { HULL, HullDef } from '@eden/shared/ships/hulls';
+import { hullSprites } from './ships/hullArt';
 import { shipHits } from './ships/shapes';
-import { ITEMS } from './ships/cargo';
-import { autopilot, FlightInput, FlightParams, FlightState, newFlight, stepFlight } from './ships/flight';
+import { ITEMS } from '@eden/shared/ships/cargo';
+import { autopilot, FlightInput, FlightParams, FlightState, newFlight, stepFlight } from '@eden/shared/ships/flight';
 import { BANK_ANGLE, BANK_LEVELS, PITCH_SIN, projectPoint, shatter, ShipSprites, splitModel } from './ships/voxel';
-import { accentRamp, css } from './palette';
-import { DEPOT_RANGE, dryFlight, fuelBurn, fullVitals, REFUEL_RATE, refitVitals, REPAIR_RANGE, REPAIR_RATE, Vitals } from './ships/vitals';
+import { accentRamp, css } from '@eden/shared/palette';
+import { DEPOT_RANGE, dryFlight, fuelBurn, fullVitals, REFUEL_RATE, refitVitals, REPAIR_RANGE, REPAIR_RATE, Vitals } from '@eden/shared/ships/vitals';
 
 interface Layer { cv: HTMLCanvasElement; ctx: CanvasRenderingContext2D }
 const layer = (): Layer => {
@@ -91,7 +93,7 @@ export class Engine {
   private selected: [number, number] | null = null;
   private buildMode: StructureKind | null = null;
   private ships: Ship[] = [];
-  private shipSources: Structure[][] = [];
+  private shipSources = new Map<number, Structure[]>();
   private shipAcc = 1;
   private parts: Particle[] = [];
   private raf = 0;
@@ -118,6 +120,8 @@ export class Engine {
   private shipTarget: { x: number; y: number } | null = null;
   /** Seconds until the flagship reappears after exploding, and the fireball's light. */
   private wreck = 0;
+  private reportAcc = 0;
+  private reported: ShipReport = { x: NaN, y: NaN };
   private booms: Boom[] = [];
   /** Assembly pieces and weld times for structures under construction, by id. */
   private builds = new Map<number, { pieces: SpriteShard[]; land: number[] }>();
@@ -158,11 +162,11 @@ export class Engine {
     this.glc.className = 'game-canvas';
     host.appendChild(this.glc);
     this.post = new Post(this.glc);
+    // Pick up where the shard last saw the flagship (beside the Nexus on a first visit).
     const meta = view.meta!;
-    const home = meta.homes[meta.player];
-    this.cam.x = tileX(home.col, home.row) + CX;
-    this.cam.y = tileY(home.row) + CY;
-    this.ship = newFlight(this.cam.x + 48, this.cam.y + 30, -Math.PI / 2);
+    this.ship = newFlight(meta.ship.x, meta.ship.y, -Math.PI / 2);
+    this.cam.x = meta.ship.x - 48;
+    this.cam.y = meta.ship.y - 30;
     this.applyHangar();
     this.cleanup.push(fleet.subscribe(() => this.applyHangar()));
     // Deep-link: ?at=col,row&zoom=4 (or ?at=f2 for a faction's home).
@@ -187,7 +191,9 @@ export class Engine {
     if (import.meta.env.DEV && q.has('ship')) this.hud.set({ shipOpen: true });
     view.listeners.destroyed = (s) => this.explodeStructure(s);
     view.listeners.squadGone = (q) => this.squadGone(q);
-    this.cleanup.push(() => (view.listeners.destroyed = view.listeners.squadGone = undefined));
+    // The shard refused a position (too fast to be real): snap back to where it says we are.
+    view.listeners.correct = (at) => Object.assign(this.ship, newFlight(at.x, at.y, this.ship.heading));
+    this.cleanup.push(() => (view.listeners.destroyed = view.listeners.squadGone = view.listeners.correct = undefined));
     this.bindInput();
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -283,7 +289,7 @@ export class Engine {
   private syncDamage() {
     const r = this.vitals.hp / this.vitals.maxHp;
     this.stage = r > 0.75 ? 0 : r > 0.5 ? 1 : r > 0.25 ? 2 : 3;
-    this.shipSprites = hullSprites(this.hull.id, this.view.meta!.player, this.stage);
+    this.shipSprites = hullSprites(this.hull.id, colorOf(this.view.me), this.stage);
   }
 
   /** After repairs: swap to the cleaner hull only when the damage stage actually drops. */
@@ -506,6 +512,7 @@ export class Engine {
     this.worldMap.update(2);
     this.updateHover();
     this.updateShips(dt);
+    this.reportShip(dt);
     this.updateWrecks(dt);
     this.render(now / 1000, dt);
     this.syncHud(dt);
@@ -568,7 +575,7 @@ export class Engine {
     if (this.cam.zoom >= 1 && this.parts.length < 600) {
       const yaw = modelYaw(s.heading), roll = Math.round(-s.bank * BANK_LEVELS) * BANK_ANGLE;
       const bx = -Math.cos(s.heading), by = -Math.sin(s.heading);
-      const col = FACTIONS[this.view.meta!.player].color;
+      const col = faction(this.view.me).color;
       for (const [i, eng] of this.shipSprites.model.engines.entries()) {
         if (Math.random() > dt * (i === 0 ? 40 : 25) * Math.max(0.15, s.thrust)) continue;
         const [ox, oy] = projectPoint(eng, yaw, roll);
@@ -664,7 +671,7 @@ export class Engine {
   private explodeShip() {
     const s = this.ship, oy = s.y - this.hull.alt, m = this.shipSprites.model;
     const yaw = modelYaw(s.heading), roll = Math.round(-s.bank * BANK_LEVELS) * BANK_ANGLE;
-    const rgb = FACTIONS[this.view.meta!.player].rgb, r = () => Math.random() - 0.5;
+    const rgb = faction(this.view.me).rgb, r = () => Math.random() - 0.5;
 
     // Chunks: the hull itself, fractured. Each starts exactly where it sat and is thrown outward and up.
     const n = Math.max(4, Math.min(8, Math.round((m.sx * m.sy) / 250)));
@@ -781,6 +788,17 @@ export class Engine {
     return { x: this.ship.x, y: this.ship.y };
   }
 
+  /** Tell the shard where we are about 8 times a second while moving (it checks we could have got there). */
+  private reportShip(dt: number) {
+    this.reportAcc += dt;
+    if (this.reportAcc < 0.125 || this.wreck) return;
+    this.reportAcc = 0;
+    const s = this.ship;
+    if (Math.hypot(s.x - this.reported.x, s.y - this.reported.y) < 0.5) return;
+    this.reported = { x: s.x, y: s.y };
+    this.view.report(this.reported);
+  }
+
   /** Crack open the selected cache with the flagship: the shard rolls the loot into the hold. */
   async openSelectedCache() {
     if (!this.selected || this.wreck) return;
@@ -876,7 +894,7 @@ export class Engine {
       x1 = x0 + ((x1 - x0) / d) * this.laser.range;
       y1 = y0 + ((y1 - y0) / d) * this.laser.range;
     }
-    const col = FACTIONS[this.view.meta!.player].color;
+    const col = faction(this.view.me).color;
     this.bolts.push({ x0, y0, x1, y1, t: 0, dur: Math.hypot(x1 - x0, y1 - y0) / 650, col, hit });
     for (let i = 0; i < 3; i++) this.parts.push({ x: x0, y: y0, vx: sh.vx + r() * 30, vy: sh.vy + r() * 30, life: 0.12, max: 0.12, col: '#ffffff' });
   }
@@ -884,7 +902,7 @@ export class Engine {
   /** Aim mode: a reticle at the cursor and the weapon's reach around the ship. */
   private drawReticle(e: CanvasRenderingContext2D, t: number) {
     if (!this.aim || !this.mouse.inside || this.wreck) return;
-    const s = this.ship, me = FACTIONS[this.view.meta!.player].color, R = this.laser.range;
+    const s = this.ship, me = faction(this.view.me).color, R = this.laser.range;
     if (R) {
       e.globalAlpha = 0.18;
       e.strokeStyle = me;
@@ -1135,28 +1153,27 @@ export class Engine {
     if (this.shipAcc > 1) {
       this.shipAcc = 0;
       const v = this.getView(), now = this.view.now();
-      this.shipSources = FACTIONS.map(() => []);
+      this.shipSources = new Map();
       for (const s of this.view.structures.values()) {
         if (progressOf(s, now) < 1) continue;
         const x = tileX(s.col, s.row), y = tileY(s.row);
         if (x < v.x - 400 || x > v.x + v.w + 400 || y < v.y - 400 || y > v.y + v.h + 400) continue;
-        this.shipSources[s.owner].push(s);
+        (this.shipSources.get(s.owner) ?? this.shipSources.set(s.owner, []).get(s.owner)!).push(s);
       }
     }
     if (this.cam.zoom >= 1)
-      FACTIONS.forEach((f) => {
-        const mine = this.shipSources[f.id] ?? [];
+      for (const [owner, mine] of this.shipSources) {
         const bays = mine.filter((s) => s.kind === 'dronebay' || s.kind === 'nexus');
         const cap = Math.min(10, bays.length * 2);
-        if (!bays.length || mine.length < 2 || this.ships.filter((s) => s.f === f.id).length >= cap || Math.random() > dt * 1.5) return;
+        if (!bays.length || mine.length < 2 || this.ships.filter((s) => s.f === owner).length >= cap || Math.random() > dt * 1.5) continue;
         const a = bays[Math.floor(Math.random() * bays.length)];
         let b = a;
         while (b === a) b = mine[Math.floor(Math.random() * mine.length)];
         const [x0, y0] = this.structTop(a), [x1, y1] = this.structTop(b);
         const dist = Math.hypot(x1 - x0, y1 - y0);
-        if (dist > 900) return;
-        this.ships.push({ f: f.id, x0, y0, x1, y1, t: 0, dur: 0.8 + dist / 55, arc: Math.min(40, dist * 0.22), trail: [] });
-      });
+        if (dist > 900) continue;
+        this.ships.push({ f: owner, x0, y0, x1, y1, t: 0, dur: 0.8 + dist / 55, arc: Math.min(40, dist * 0.22), trail: [] });
+      }
     this.ships = this.ships.filter((s) => (s.t += dt) < s.dur);
 
     for (const p of this.parts) {
@@ -1364,9 +1381,9 @@ export class Engine {
         const o = ch.owner[i];
         if (o >= 0) {
           l.globalAlpha = 0.09;
-          l.drawImage(assets.fill(FACTIONS[o].color), x, y);
+          l.drawImage(assets.fill(faction(o).color), x, y);
           e.globalAlpha = 0.7 * pulse;
-          for (let d = 0; d < 6; d++) if (view.owner(...neighbor(col, r, d)) !== o) e.drawImage(assets.edges[o][d], x, y);
+          for (let d = 0; d < 6; d++) if (view.owner(...neighbor(col, r, d)) !== o) e.drawImage(assets.edges[colorOf(o)][d], x, y);
         }
         if (build && view.canBuild(build, col, r).ok) {
           l.globalAlpha = 0.28 + 0.1 * Math.sin(t * 4);
@@ -1394,7 +1411,7 @@ export class Engine {
    */
   private drawConstruction(s: Structure, x: number, y: number, t: number, now: number) {
     const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
-    const spr = assets.structure(s.kind, s.owner), col = FACTIONS[s.owner].color;
+    const spr = assets.structure(s.kind, s.owner), col = faction(s.owner).color;
     const sx = x + SOX, sy = y + SOY, D = s.finishAt - s.startedAt;
     let b = this.builds.get(s.id);
     if (!b) {
@@ -1557,7 +1574,7 @@ export class Engine {
   private drawStructure(s: Structure, x: number, y: number, t: number, now: number) {
     const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
     const spr = assets.structure(s.kind, s.owner);
-    const f = FACTIONS[s.owner];
+    const f = faction(s.owner);
     const sx = x + SOX, sy = y + SOY;
     const seed = tileSeed(s.col, s.row);
     const progress = progressOf(s, now);
@@ -1604,7 +1621,7 @@ export class Engine {
 
     if (s.kind === 'shield') {
       e.globalAlpha = 0.32 + 0.1 * Math.sin(t * 2 + seed * 6);
-      e.drawImage(assets.domes[s.owner], x + CX - 23, y + CY - 30);
+      e.drawImage(assets.domes[colorOf(s.owner)], x + CX - 23, y + CY - 30);
       e.globalAlpha = 1;
     }
 
@@ -1616,7 +1633,7 @@ export class Engine {
 
   private drawFlagship(t: number) {
     const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx;
-    const s = this.ship, col = FACTIONS[this.view.meta!.player].color;
+    const s = this.ship, col = faction(this.view.me).color;
     const lvl = Math.max(-BANK_LEVELS, Math.min(BANK_LEVELS, Math.round(-s.bank * BANK_LEVELS)));
     const f = this.shipSprites.frame(ShipSprites.yawIndex(modelYaw(s.heading)), lvl);
     const half = this.shipSprites.size / 2;
@@ -1770,7 +1787,7 @@ export class Engine {
           // From the cannon's muzzle, wherever the mech is facing.
           const [mx, my] = projectPoint(MUZZLE, trooperFrame(q.owner, 0, modelYaw(Math.atan2(y1 - py, x1 - px))).yaw, 0);
           const x0 = px + mx, y0 = py - TROOPER_LIFT + my;
-          this.bolts.push({ x0, y0, x1, y1, t: 0, dur: Math.hypot(x1 - x0, y1 - y0) / 420, col: FACTIONS[q.owner].color, hit: true, small: true });
+          this.bolts.push({ x0, y0, x1, y1, t: 0, dur: Math.hypot(x1 - x0, y1 - y0) / 420, col: faction(q.owner).color, hit: true, small: true });
           fx.flash = i;
         }
       }
@@ -1782,7 +1799,7 @@ export class Engine {
           // From one of the battery's two barrels to a trooper.
           const x0 = tileX(g.col, g.row) + CX - 17, y0 = tileY(g.row) + CY - 24 + (Math.random() < 0.5 ? 0 : 3);
           const [tx, ty] = pos(Math.floor(Math.random() * alive));
-          this.bolts.push({ x0, y0, x1: tx + r() * 4, y1: ty - TROOPER_CHEST, t: 0, dur: Math.hypot(tx - x0, ty - y0) / 650, col: FACTIONS[g.owner].color, hit: true });
+          this.bolts.push({ x0, y0, x1: tx + r() * 4, y1: ty - TROOPER_CHEST, t: 0, dur: Math.hypot(tx - x0, ty - y0) / 650, col: faction(g.owner).color, hit: true });
           this.parts.push({ x: x0, y: y0, vx: r() * 30, vy: r() * 30, life: 0.12, max: 0.12, col: '#ffffff' });
         }
       }
@@ -1816,7 +1833,7 @@ export class Engine {
   private trooperDown(x: number, y: number, owner: number, yaw: number) {
     if (this.cam.zoom < 1) return;
     const r = () => Math.random() - 0.5, oy = y - TROOPER_LIFT;
-    for (const d of shatter(mechModel(0), yaw, 0, accentRamp(FACTIONS[owner].rgb), 380)) {
+    for (const d of shatter(mechModel(0), yaw, 0, accentRamp(faction(owner).rgb), 380)) {
       const life = 1.2 + Math.random() * 1.6;
       this.parts.push({
         x: x + d.x, y: oy + d.y, vx: d.vx * 1.1, vy: d.vy * 1.1,
@@ -1826,14 +1843,14 @@ export class Engine {
     this.blast(x, y - TROOPER_CHEST, y, 0.8);
     for (let i = 0; i < 4; i++) {
       const life = 4 + Math.random() * 3;
-      this.parts.push({ x: x + r() * 10, y: y + r() * 4, vx: r() * 30, vy: r() * 16, life, max: life, col: i ? '#3a4660' : FACTIONS[owner].color, solid: true, drag: 5, size: 2 });
+      this.parts.push({ x: x + r() * 10, y: y + r() * 4, vx: r() * 30, vy: r() * 16, life, max: life, col: i ? '#3a4660' : faction(owner).color, solid: true, drag: 5, size: 2 });
     }
   }
 
   /** A voxel mech (see trooperArt.ts) on a soft shadow, lit by its visor, with a flash at the cannon when it fires. */
   private drawTrooper(tr: Trooper) {
     const c = this.col.ctx, e = this.emit.ctx, l = this.light.ctx, x = Math.round(tr.x), y = Math.round(tr.y);
-    const col = FACTIONS[tr.owner].color, { frame, half, yaw } = trooperFrame(tr.owner, tr.pose, tr.yaw);
+    const col = faction(tr.owner).color, { frame, half, yaw } = trooperFrame(tr.owner, tr.pose, tr.yaw);
     c.globalAlpha = 0.4;
     c.fillStyle = '#04050a';
     c.beginPath();
@@ -1865,7 +1882,7 @@ export class Engine {
       const at = squadAt(q, now), cx = Math.round(at.x), cy = Math.round(at.y);
       if (q.owner === me && !at.arrived) {
         const dots = routeDots(q.route, Math.max(0, now - q.startAt) * q.speed, 8);
-        e.fillStyle = FACTIONS[me].color;
+        e.fillStyle = faction(me).color;
         for (let i = 0; i < dots.length; i += 2) {
           e.globalAlpha = 0.15 + 0.2 * (((i >> 1) + Math.floor(t * 6)) % 3 === 0 ? 1 : 0);
           e.fillRect(Math.round(dots[i]), Math.round(dots[i + 1]), 1, 1);
@@ -1899,7 +1916,7 @@ export class Engine {
       const x0 = tileX(from.col, from.row) + CX, y0 = tileY(from.row) + CY;
       const x1 = tgt ? tileX(tgt.col, tgt.row) + CX : m.x, y1 = tgt ? tileY(tgt.row) + CY : m.y;
       const len = Math.hypot(x1 - x0, y1 - y0);
-      e.fillStyle = tgt ? '#ff5a70' : FACTIONS[me].color;
+      e.fillStyle = tgt ? '#ff5a70' : faction(me).color;
       for (let d = (t * 30) % 5; d < len; d += 5) {
         e.globalAlpha = 0.7;
         e.fillRect(Math.round(x0 + ((x1 - x0) * d) / len), Math.round(y0 + ((y1 - y0) * d) / len), 1, 1);
@@ -1914,7 +1931,7 @@ export class Engine {
     e.globalAlpha = alpha;
     for (const q of this.view.squads.values()) {
       const at = squadAt(q, now);
-      e.fillStyle = FACTIONS[q.owner].color;
+      e.fillStyle = faction(q.owner).color;
       e.fillRect(at.x - z / 2, at.y - z / 2, z, z);
     }
     e.globalAlpha = 1;
@@ -1927,7 +1944,7 @@ export class Engine {
     e.translate(s.x, s.y);
     e.rotate(s.heading);
     e.globalAlpha = alpha;
-    e.fillStyle = FACTIONS[this.view.meta!.player].color;
+    e.fillStyle = faction(this.view.me).color;
     e.beginPath();
     e.moveTo(z, 0);
     e.lineTo(-z * 0.75, z * 0.65);
@@ -1945,7 +1962,7 @@ export class Engine {
       const y = Math.round(s.y0 + (s.y1 - s.y0) * p - Math.sin(Math.PI * p) * s.arc);
       s.trail.push(x, y);
       if (s.trail.length > 20) s.trail.splice(0, 2);
-      const col = FACTIONS[s.f].color;
+      const col = faction(s.f).color;
       e.fillStyle = col;
       for (let i = 0; i < s.trail.length - 2; i += 2) {
         e.globalAlpha = (i / s.trail.length) * 0.55;
@@ -1969,7 +1986,7 @@ export class Engine {
 
   private drawOverlays(t: number, k: number) {
     const e = this.emit.ctx, l = this.light.ctx;
-    const me = FACTIONS[this.view.meta!.player];
+    const me = faction(this.view.me);
     if (this.selected) {
       const [col, row] = this.selected;
       const x = tileX(col, row), y = tileY(row);
@@ -1985,7 +2002,7 @@ export class Engine {
       } else {
         const tall = this.view.structure(col, row) ? 40 : 6;
         e.globalAlpha = 1;
-        e.drawImage(assets.chevrons[this.view.meta!.player], x + CX - 3, y + CY - tall - 8 + Math.round(Math.sin(t * 4) * 2));
+        e.drawImage(assets.chevrons[colorOf(this.view.me)], x + CX - 3, y + CY - tall - 8 + Math.round(Math.sin(t * 4) * 2));
       }
       e.globalAlpha = 1;
     }

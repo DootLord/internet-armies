@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { HullId, hullSprites } from '../game/ships/hulls';
+import type { HullId } from '@eden/shared/ships/hulls';
+import { hullSprites } from '../game/ships/hullArt';
 import { YAW_STEPS } from '../game/ships/voxel';
 
 /**

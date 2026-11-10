@@ -83,4 +83,3 @@ export const FACTIONS: Faction[] = [
   f(8, 'Nova Dominion', 'NOV', '#ff6bd5'),
   f(9, 'Iron Meridian', 'IRM', '#a9bdd6'),
 ];
-export const PLAYER = 0;

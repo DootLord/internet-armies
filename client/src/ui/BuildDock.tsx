@@ -1,4 +1,4 @@
-import { BUILDABLE, RES_KEYS } from '../game/defs';
+import { BUILDABLE, RES_KEYS } from '@eden/shared/defs';
 import { getEngine, hud } from '../game/game';
 import { useStore } from '../game/store';
 import { ResIcon } from './icons';

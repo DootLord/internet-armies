@@ -1,6 +1,6 @@
-import { ResKey } from '../game/defs';
-import type { Slot } from '../game/ships/hulls';
-import { MODULE, ModuleIconId } from '../game/ships/modules';
+import { ResKey } from '@eden/shared/defs';
+import type { Slot } from '@eden/shared/ships/hulls';
+import { MODULE, ModuleIconId } from '@eden/shared/ships/modules';
 
 // Pixel glyphs: each char indexes the palette ('.' = empty). Rendered as SVG rects
 // so they stay crisp at any integer scale.

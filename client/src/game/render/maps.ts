@@ -3,12 +3,13 @@
 //   ChunkMaps  per-chunk map image (3x2 px per hex), from live chunk state
 //   WorldMap   whole-world image from procedural terrain + the shard overview;
 //              covers chunks we aren't streaming and doubles as the minimap
-import { Chunk, CS } from '../chunks';
-import { FACTIONS } from '../defs';
-import { pick } from '../hex';
-import { hex, RGB } from '../palette';
-import { terrainKind, VOID } from '../terrain';
-import type { Overview } from '../protocol';
+import { Chunk, CS } from '@eden/shared/chunks';
+import { FACTIONS } from '@eden/shared/defs';
+import { colorOf } from '../empires';
+import { pick } from '@eden/shared/hex';
+import { hex, RGB } from '@eden/shared/palette';
+import { terrainKind, VOID } from '@eden/shared/terrain';
+import type { Overview } from '@eden/shared/protocol';
 import type { WorldView } from '../WorldView';
 
 /**
@@ -17,7 +18,7 @@ import type { WorldView } from '../WorldView';
  * terrain should read as quiet texture, never compete with faction colours.
  */
 const KIND_RGB: RGB[] = ['#000000', '#283043', '#231f27', '#30261f', '#1f3238', '#26334a', '#2a2337', '#272123', '#3a2f1c', '#283043'].map(hex);
-const FACTION_RGB = FACTIONS.map((f) => f.rgb);
+const rgbOf = (owner: number) => FACTIONS[colorOf(owner)].rgb;
 
 export const OV_W = CS * 3 + 1;
 export const OV_H = CS * 2;
@@ -71,16 +72,16 @@ export class ChunkMaps {
         if (o >= 0) {
           const col = c.cx * CS + lc, row = c.cy * CS + lr;
           for (const [dc, dr] of NEIGHBOR_OFFSETS[row & 1]) if (view.owner(col + dc, row + dr) !== o) { border = true; break; }
-          const f = FACTION_RGB[o];
+          const f = rgbOf(o);
           const t = border ? 0.9 : 0.45;
           rgb = [rgb[0] + (f[0] - rgb[0]) * t, rgb[1] + (f[1] - rgb[1]) * t, rgb[2] + (f[2] - rgb[2]) * t];
         }
         if (!live) rgb = [rgb[0] * 0.7, rgb[1] * 0.7, rgb[2] * 0.7];
         for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 3; dx++) put(ci.data, x + dx, y + dy, rgb);
-        if (border) for (let dx = 0; dx < 3; dx++) put(ei.data, x + dx, y, FACTION_RGB[o], 150);
+        if (border) for (let dx = 0; dx < 3; dx++) put(ei.data, x + dx, y, rgbOf(o), 150);
         const s = c.structures.get(i);
         if (s) {
-          const srgb: RGB = s.kind === 'nexus' ? [255, 255, 255] : FACTION_RGB[s.owner];
+          const srgb: RGB = s.kind === 'nexus' ? [255, 255, 255] : rgbOf(s.owner);
           put(ci.data, x + 1, y, srgb);
           put(ei.data, x + 1, y, srgb, 255);
         }
@@ -177,7 +178,7 @@ export class WorldMap {
       for (let x = 0; x < ov.w; x++) {
         const f = ov.owner[y * ov.w + x];
         if (f < 0) continue;
-        const rgb = FACTION_RGB[f], i = (y * ov.w + x) * 4;
+        const rgb = rgbOf(f), i = (y * ov.w + x) * 4;
         oi.data.set([rgb[0], rgb[1], rgb[2], 255], i);
         if (at(x + 1, y) !== f || at(x - 1, y) !== f || at(x, y + 1) !== f || at(x, y - 1) !== f) bi.data.set([rgb[0], rgb[1], rgb[2], 255], i);
       }

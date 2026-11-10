@@ -3,13 +3,14 @@
 //
 //   viewport ──► want set (visible + 1 ring) ──► subscribe / unsubscribe (with hysteresis)
 //   snapshot ──► chunk.rev = n          delta(rev n+1) ──► apply     delta(rev ≠ n+1) ──► resync
-import { emptyRes, StructureKind, TileKind } from './defs';
-import { Chunk, CHUNK_PX_H, CHUNK_PX_W, chunkKeyOf, localIndex, pack } from './chunks';
-import { fillChunk, KINDS, TerrainParams } from './terrain';
-import { canBuild, isAdjacentTo, WorldRead } from './rules';
-import type { Fit } from './ships/fitting';
-import type { FleetState } from './ships/fleet';
-import type { BuildCheck, CargoOp, CargoState, ChunkDelta, FireOrder, ShipReport, ChunkSnapshot, Overview, PlayerState, Squad, Structure, WorldEvent, WorldMeta, WorldSource } from './protocol';
+import { emptyRes, StructureKind, TileKind } from '@eden/shared/defs';
+import { Chunk, CHUNK_PX_H, CHUNK_PX_W, chunkKeyOf, localIndex, pack } from '@eden/shared/chunks';
+import { fillChunk, KINDS, TerrainParams } from '@eden/shared/terrain';
+import { canBuild, isAdjacentTo, WorldRead } from '@eden/shared/rules';
+import type { Fit } from '@eden/shared/ships/fitting';
+import type { FleetState } from '@eden/shared/ships/fleet';
+import { empireName, learnEmpires } from './empires';
+import type { BuildCheck, CargoOp, CargoState, ChunkDelta, FireOrder, ShipReport, ChunkSnapshot, Overview, PlayerState, Squad, Structure, WorldEvent, WorldMeta, WorldSource } from '@eden/shared/protocol';
 
 /** Beyond this many chunks in view, stop per-chunk streaming and rely on the overview. */
 export const MAX_DETAIL_CHUNKS = 300;
@@ -39,6 +40,8 @@ export interface ViewListeners {
   fleet?: (f: FleetState) => void;
   /** A squad vanished: killed (its health ran out) or stood down. */
   squadGone?: (q: Squad) => void;
+  /** The shard refused a reported flagship position and put it back here. */
+  correct?: (at: ShipReport) => void;
 }
 
 export class WorldView implements WorldRead {
@@ -95,9 +98,13 @@ export class WorldView implements WorldRead {
         this.listeners.overview?.(o);
       },
       event: (e) => {
+        // The same event can arrive twice: once because it's yours, once because you watch its chunk.
+        if (this.log.some((x) => x.id === e.id)) return;
         this.log = [e, ...this.log].slice(0, 40);
         this.listeners.event?.(e);
       },
+      empires: (list) => learnEmpires(list),
+      correct: (at) => this.listeners.correct?.(at),
     });
     this.params = { seed: this.meta.seed, radiusPx: this.meta.radiusPx };
     return this.meta;
@@ -130,6 +137,19 @@ export class WorldView implements WorldRead {
 
   isAdjacentTo(col: number, row: number, f: number) {
     return isAdjacentTo(this, col, row, f);
+  }
+
+  empireName(id: number) {
+    return empireName(id);
+  }
+
+  /** Your empire id (0 before connecting). */
+  get me() {
+    return this.meta?.player ?? 0;
+  }
+
+  report(ship: ShipReport) {
+    this.source.report(ship);
   }
 
   /** Client-side prediction for instant feedback; the shard re-checks everything. */

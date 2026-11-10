@@ -1,5 +1,6 @@
-import { FACTIONS, PLAYER, RES_INFO, RES_KEYS, ResKey } from '../game/defs';
-import { hud } from '../game/game';
+import { RES_INFO, RES_KEYS, ResKey } from '@eden/shared/defs';
+import { faction } from '../game/empires';
+import { hud, world } from '../game/game';
 import { useStore } from '../game/store';
 import { Emblem, ResIcon } from './icons';
 
@@ -23,7 +24,7 @@ function Resource({ k }: { k: ResKey }) {
 export function TopBar() {
   const cycle = useStore(hud, (s) => s.cycle);
   const sectors = useStore(hud, (s) => s.sectors);
-  const me = FACTIONS[PLAYER];
+  const me = faction(world.me);
   return (
     <header className="topbar f-strip">
       <div className="who">

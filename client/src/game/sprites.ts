@@ -2,12 +2,13 @@
 // ordered dithering, then split into a colour layer (lit by the scene) and an
 // emissive layer (feeds bloom). Nothing here is hand-authored art — swap in real
 // sprite sheets later by keeping the same {color, emit} shape.
-import { FACTIONS, StructureKind, STRUCTURES, TILE_KINDS, TileKind } from './defs';
-import { botY, edgeDist, edgeOf, FH, inFace, topY, TW } from './hex';
+import { colorOf } from './empires';
+import { FACTIONS, StructureKind, STRUCTURES, TILE_KINDS, TileKind } from '@eden/shared/defs';
+import { botY, edgeDist, edgeOf, FH, inFace, topY, TW } from '@eden/shared/hex';
 import {
   accentRamp, C_AMBER, C_CYAN, C_RED, C_VENT, C_WHITE, CRY, css, GAS, hex, ICE, lum, mix, ORE, OUTLINE, PANEL, RGB, ROCK, RUST, STEEL,
-} from './palette';
-import { bayer, fbm, hash2, mulberry32, smoothstep, vnoise } from './rng';
+} from '@eden/shared/palette';
+import { bayer, fbm, hash2, mulberry32, smoothstep, vnoise } from '@eden/shared/rng';
 
 export const TILE_PAD = 18; // headroom above the face for crystals etc.
 const TILE_DEPTH = 22;
@@ -688,7 +689,8 @@ class Assets {
   }
 
   tile(kind: TileKind, variant: number) { return this.tiles.get(`${kind}${variant}`)!; }
-  structure(kind: StructureKind, owner: number) { return this.structs.get(`${kind}${owner}`)!; }
+  /** A structure's sprites in its owner's colours. */
+  structure(kind: StructureKind, owner: number) { return this.structs.get(`${kind}${colorOf(owner)}`)!; }
 
   light(col: string) {
     let cv = this.lights.get(col);

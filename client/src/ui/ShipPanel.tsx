@@ -1,6 +1,6 @@
 import { cargo, fleet, flyingShip, hud } from '../game/game';
-import { computeStats } from '../game/ships/fitting';
-import { HULL } from '../game/ships/hulls';
+import { computeStats } from '@eden/shared/ships/fitting';
+import { HULL } from '@eden/shared/ships/hulls';
 import { useStore } from '../game/store';
 import { bayOf, CargoBays } from './CargoHold';
 import { UiIcon } from './icons';

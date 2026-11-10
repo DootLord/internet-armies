@@ -1,18 +1,18 @@
 // Fire orders through the shard: damage is derived from timestamps, never
 // ticked, and a destroyed structure reaches watching clients as an explosion.
 import { describe, expect, it } from 'vitest';
-import { PLAYER, STRUCT } from '../defs';
-import { tileCenterX, tileCenterY } from '../terrain';
-import { tileX, tileY } from '../hex';
-import { hpOf, Structure } from '../protocol';
-import { weaponStats } from '../ships/fitting';
-import { starterFit } from '../ships/hangar';
-import { LocalShard } from '../sim/LocalShard';
+import { STRUCT } from '@eden/shared/defs';
+import { tileCenterX, tileCenterY } from '@eden/shared/terrain';
+import { tileX, tileY } from '@eden/shared/hex';
+import { hpOf, Structure } from '@eden/shared/protocol';
+import { weaponStats } from '@eden/shared/ships/fitting';
+import { starterFit } from '@eden/shared/ships/hangar';
+import { LocalShard } from '@eden/shared/sim/LocalShard';
 import { WorldView } from '../WorldView';
 
 async function setup() {
   let t = 0;
-  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t });
+  const shard = new LocalShard({ seed: 7, radiusPx: 6000, latencyMs: 0, manual: true, clock: () => t, rivals: 1 });
   const view = new WorldView(shard);
   const advance = (seconds: number) => {
     for (let i = 0; i < seconds * 10; i++) {
@@ -21,7 +21,7 @@ async function setup() {
     }
   };
   await view.connect();
-  const home = view.meta!.homes[PLAYER];
+  const home = view.meta!.homes[view.me];
   view.update({ x: tileX(home.col, home.row) - 1500, y: tileY(home.row) - 900, w: 3000, h: 1800 }, 1000);
   // A finished Solar Array next to the Nexus to shoot at.
   let spot: [number, number] | null = null;
@@ -32,7 +32,13 @@ async function setup() {
   const target = view.structure(...spot!)!;
   const fit = starterFit('lancer');
   const near = { x: tileCenterX(...spot!), y: tileCenterY(spot![1]) + 40, hull: 'lancer' as const, fit };
-  return { shard, view, advance, target, near, now: () => shard.now() };
+  // Fly there for real: the shard rejects positions the ship couldn't have reached in time.
+  const flyTo = (at: { x: number; y: number }) => {
+    advance(8);
+    view.report(at);
+  };
+  flyTo(near);
+  return { shard, view, advance, flyTo, target, near, now: () => shard.now() };
 }
 
 describe('combat', () => {
@@ -54,7 +60,7 @@ describe('combat', () => {
   });
 
   it('settles health when firing stops, and refuses targets out of range', async () => {
-    const { view, advance, target, near, now } = await setup();
+    const { view, advance, flyTo, target, near, now } = await setup();
     await view.fire({ ...near, target: target.id });
     advance(3);
     await view.fire(null);
@@ -65,7 +71,9 @@ describe('combat', () => {
     advance(5);
     expect(hpOf(view.structure(target.col, target.row)!, now())).toBe(hp);
 
-    const far = await view.fire({ ...near, x: near.x + 5000, target: target.id });
+    const away = { ...near, x: near.x + 1000 };
+    flyTo(away);
+    const far = await view.fire({ ...away, target: target.id });
     expect(far).toEqual({ ok: false, reason: 'Out of range' });
   });
 });

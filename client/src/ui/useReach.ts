@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import { PLAYER } from '../game/defs';
 import { getEngine, world } from '../game/game';
-import { CX, CY, tileX, tileY } from '../game/hex';
-import { progressOf, Structure } from '../game/protocol';
-import { DOCK_RANGE } from '../game/ships/fleet';
+import { CX, CY, tileX, tileY } from '@eden/shared/hex';
+import { progressOf, Structure } from '@eden/shared/protocol';
+import { DOCK_RANGE } from '@eden/shared/ships/fleet';
 
 /** Re-render a few times a second while mounted: the flagship moves every frame. */
 export function useTick(on = true) {
@@ -26,7 +25,7 @@ export function dockedHangar(): Structure | null {
   const now = world.now();
   let best: Structure | null = null, bd = DOCK_RANGE;
   for (const s of world.structures.values()) {
-    if (s.kind !== 'hangar' || s.owner !== PLAYER || progressOf(s, now) < 1) continue;
+    if (s.kind !== 'hangar' || s.owner !== world.me || progressOf(s, now) < 1) continue;
     const d = distanceTo(s);
     if (d <= bd) {
       bd = d;

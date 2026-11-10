@@ -1,5 +1,5 @@
 import { CSSProperties } from 'react';
-import { StructureKind } from '../game/defs';
+import { StructureKind } from '@eden/shared/defs';
 import { assets } from '../game/sprites';
 
 /**

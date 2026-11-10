@@ -1,8 +1,9 @@
-import { FACTIONS, PLAYER, RES_KEYS, STRUCT, TILE_INFO } from '../game/defs';
+import { RES_KEYS, STRUCT, TILE_INFO } from '@eden/shared/defs';
+import { faction } from '../game/empires';
 import { getEngine, hud, world } from '../game/game';
 import { assets } from '../game/sprites';
 import { useStore } from '../game/store';
-import { SQUAD_COST } from '../game/units';
+import { SQUAD_COST } from '@eden/shared/units';
 import { ResIcon } from './icons';
 import { SpriteIcon } from './SpriteIcon';
 import { useTick } from './useReach';
@@ -64,9 +65,9 @@ export function SelectionPanel() {
   const tile = TILE_INFO[sel.kind];
   const s = sel.structure;
   const def = s && STRUCT[s.kind];
-  const owner = sel.owner >= 0 ? FACTIONS[sel.owner] : null;
+  const owner = sel.owner >= 0 ? faction(sel.owner) : null;
   const produce = def && s!.progress >= 1 ? def.produce(sel.kind) : null;
-  const mine = s?.owner === PLAYER;
+  const mine = s?.owner === world.me;
 
   return (
     <section className="selection f-panel">
@@ -122,7 +123,7 @@ export function SelectionPanel() {
                   <ResIcon k={k} size={12} />+{tile.deposit![k]} if mined
                 </span>
               ))}
-            {!s && sel.owner === -1 && world.isAdjacentTo(sel.col, sel.row, PLAYER) && <span className="hint">Frontier: a Claim Relay here expands your borders</span>}
+            {!s && sel.owner === -1 && world.isAdjacentTo(sel.col, sel.row, world.me) && <span className="hint">Frontier: a Claim Relay here expands your borders</span>}
           </div>
           {sel.kind === 'cache' && (
             <button className="pbtn wide" onClick={() => getEngine()?.openSelectedCache()}>
