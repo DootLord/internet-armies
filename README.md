@@ -1,4 +1,4 @@
-# Internet Armies
+# Eden
 
 A persistent, single-shard sci-fi territory builder: every player builds on the same hex cluster.
 
