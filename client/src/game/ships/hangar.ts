@@ -8,6 +8,12 @@ import { MODULE } from './modules';
 export const STARTERS: Record<HullId, string[]> = {
   wisp: ['pulse-laser', 'afterburner', 'shield-ext', 'inertial'],
   lancer: ['pulse-laser', 'pulse-laser', 'mining-beam', 'shield-ext', 'afterburner', 'armor-plate', 'stabilizer'],
+  regent: ['pulse-laser', 'pulse-laser', 'rail-driver', 'mining-beam', 'shield-ext', 'shield-ext', 'afterburner', 'sensor-array', 'armor-plate', 'stabilizer', 'power-relay'],
+  halberd: [
+    'siege-lance', 'siege-lance', 'siege-lance', 'rail-driver', 'rail-driver', 'pulse-laser', 'pulse-laser',
+    'shield-ext', 'shield-ext', 'sensor-array',
+    'armor-plate', 'armor-plate', 'armor-plate', 'stabilizer', 'stabilizer', 'power-relay',
+  ],
   bastion: ['siege-lance', 'rail-driver', 'rail-driver', 'shield-ext', 'sensor-array', 'armor-plate', 'armor-plate', 'power-relay'],
   mule: ['mining-beam', 'shield-ext', 'tractor', 'hold-expander', 'hold-expander', 'armor-plate'],
 };

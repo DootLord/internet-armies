@@ -50,16 +50,28 @@ export const HULLS: HullDef[] = [
     alt: 14, shadow: 10,
   },
   {
-    id: 'lancer', name: 'Lancer', class: 'Strike Cruiser', role: 'Balanced command ship. Fits almost anything, masters nothing.',
+    id: 'lancer', name: 'Lancer', class: 'Strike Cruiser', role: 'Dependable all-rounder. Fits almost anything, masters nothing.',
     slots: { high: 4, mid: 3, low: 3 },
     base: attrs({ cpu: 230, power: 230, maxSpeed: 150, accel: 240, turnRate: 2.7, shield: 1400, armor: 1200, hull: 1000, cargo: 320, fuel: 110 }),
     alt: 16, shadow: 15,
+  },
+  {
+    id: 'regent', name: 'Regent', class: 'Command Cruiser', role: 'The Lancer grown up. Better at everything, still the best at nothing.',
+    slots: { high: 5, mid: 4, low: 4 },
+    base: attrs({ cpu: 320, power: 340, maxSpeed: 160, accel: 260, turnRate: 2.8, shield: 2000, armor: 1700, hull: 1500, cargo: 480, fuel: 140 }),
+    alt: 18, shadow: 17,
   },
   {
     id: 'bastion', name: 'Bastion', class: 'Heavy Gunship', role: 'Slow, armoured gun platform for holding territory.',
     slots: { high: 5, mid: 3, low: 5 },
     base: attrs({ cpu: 300, power: 950, maxSpeed: 92, accel: 110, turnRate: 1.4, shield: 3000, armor: 4200, hull: 3200, cargo: 450, fuel: 160 }),
     alt: 22, shadow: 22,
+  },
+  {
+    id: 'halberd', name: 'Halberd', class: 'Destroyer', role: 'Huge, heavily armed and armoured. Turns like a continent.',
+    slots: { high: 7, mid: 3, low: 6 },
+    base: attrs({ cpu: 400, power: 1500, maxSpeed: 78, accel: 90, turnRate: 1.0, shield: 4000, armor: 6500, hull: 5000, cargo: 300, fuel: 180 }),
+    alt: 26, shadow: 28,
   },
   {
     id: 'mule', name: 'Mule', class: 'Hauler', role: 'Moves materials between sectors. Huge hold, barely armed.',

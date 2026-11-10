@@ -4,7 +4,7 @@
 // Model space as in ships/shapes.ts: x along the item's footprint width, y along
 // its height, z up; one unit = one art px (a cargo cell is 16 art px).
 import { ItemKind, ITEMS } from './ships/cargo';
-import { buildModel, Mat, renderFrame, VoxelModel } from './ships/voxel';
+import { buildModel, Mat, renderFrame, ShipFrame, VoxelModel } from './ships/voxel';
 import { accentRamp, hex } from './palette';
 import { hash2 } from './rng';
 
@@ -119,3 +119,21 @@ export function itemPose(kind: ItemKind, rot: boolean, a: number): string {
   }
   return url;
 }
+
+const frames = new Map<string, ShipFrame & { size: number }>();
+/**
+ * An item's colour and emissive layers as separate canvases, for scenes that
+ * run them through the bloom pass (the mining dig) rather than an <img>.
+ */
+export function itemSprite(kind: ItemKind, yaw = BASE_YAW): ShipFrame & { size: number } {
+  const key = `${kind}|${yaw.toFixed(2)}`;
+  let f = frames.get(key);
+  if (!f) {
+    const size = Math.round(itemSpan(kind) * 16);
+    frames.set(key, (f = { ...renderFrame(model(kind), yaw, 0, accentRamp(hex(SPECS[kind].color)), size), size }));
+  }
+  return f;
+}
+
+/** The item's signature colour, for its glow and shatter debris. */
+export const itemColor = (kind: ItemKind) => SPECS[kind].color;

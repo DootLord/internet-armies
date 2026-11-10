@@ -5,6 +5,7 @@ import { PLAYER } from '../defs';
 import { tileX, tileY } from '../hex';
 import { emptyFit, withModule } from '../ships/fitting';
 import { DOCK_RANGE } from '../ships/fleet';
+import { HULLS } from '../ships/hulls';
 import { LocalShard } from '../sim/LocalShard';
 import { tileCenterX, tileCenterY } from '../terrain';
 import { WorldView } from '../WorldView';
@@ -33,7 +34,7 @@ describe('fleet', () => {
   it('starts with one ship flying and the rest stationed at a starter Hangar', async () => {
     const { view, hangar } = await setup();
     const f = view.fleet!;
-    expect(f.ships.length).toBe(4);
+    expect(f.ships.length).toBe(HULLS.length);
     expect(f.ships.find((s) => s.id === f.flying)!.station).toBeNull();
     expect(f.ships.filter((s) => s.id !== f.flying).every((s) => s.station === hangar.id)).toBe(true);
   });

@@ -47,6 +47,76 @@ const lancer: Shape = (x, y, z) => {
   return p.get();
 };
 
+// ---------------------------------------------------------------- Regent: command cruiser
+const regent: Shape = (x, y, z) => {
+  const ay = Math.abs(y), p = picker();
+  // The Lancer's lines stretched and broadened, with a livery band amidships.
+  if (x > -23 && x < 25) {
+    const u = (x + 23) / 48;
+    const w = u < 0.4 ? lerp(3.6, 4.6, u / 0.4) : lerp(4.6, 1, Math.pow((u - 0.4) / 0.6, 1.3));
+    const top = (u < 0.45 ? lerp(3.2, 4, u / 0.45) : lerp(4, 0.9, (u - 0.45) / 0.55)) - ay * 0.5;
+    const bot = -(u < 0.55 ? 2.8 : lerp(2.8, 0.8, (u - 0.55) / 0.45)) + ay * 0.3;
+    const slot = x > 14 && ay < 1 && z > bot + 0.6;
+    if (ay <= w && z <= top && z >= bot && !slot) {
+      if (x < -21.6) p.take(ay < 2.4 && z > -1.6 && z < 2 ? Mat.Engine : Mat.Dark);
+      else if (z > top - 1 && x > 5 && x < 10 && ay < 1.8) p.take(Mat.Glass);
+      else if (ay > w - 0.8 && x > -7 && x < -2) p.take(Mat.Accent);
+      else p.take(z < bot + 0.9 ? Mat.Dark : Mat.Hull);
+    }
+  }
+  // Stepped command bridge with a glass crown and a sensor mast.
+  if (x > -14 && x < -2 && ay < 3 && z >= 3 && z <= 6 - (x > -5 ? (x + 5) * 0.7 : 0)) p.take(x > -7 && z > 4.6 ? Mat.Glass : Mat.Hull);
+  if (x > -11 && x < -9 && ay < 0.5 && z > 6 && z < 9.5) p.take(z > 8.8 ? Mat.Light : Mat.Dark);
+  // Swept wings: accent leading edges, wingtip lights.
+  if (ay >= 3 && ay <= 12.5) {
+    const lead = 2 - (ay - 3) * 1.1, trail = -12 - (ay - 3) * 0.5;
+    if (x <= lead && x >= trail && Math.abs(z) <= 0.6) p.take(x > lead - 1.4 && z > -0.2 ? Mat.Accent : z < -0.2 ? Mat.Dark : Mat.Hull);
+    if (ay > 11.6 && x <= lead && x >= lead - 1.6 && z > 0) p.take(Mat.Light);
+  }
+  // Twin engine nacelles, longer than the Lancer's.
+  const ny = ay - 7;
+  if (x > -22 && x < -2) {
+    if ((ny * ny) / (2.1 * 2.1) + ((z + 1) * (z + 1)) / (2 * 2) <= 1) {
+      if (x < -20.6 || (x < -19.6 && z > -0.5)) p.take(Mat.Engine);
+      else p.take(x > -3.5 ? Mat.Dark : Mat.Hull);
+    }
+  }
+  return p.get();
+};
+
+// ---------------------------------------------------------------- Halberd: destroyer
+const halberd: Shape = (x, y, z) => {
+  const ay = Math.abs(y), p = picker();
+  // Main hull: long arrowhead wedge, broad aft, knife prow, armour seams on the deck.
+  if (x > -36 && x < 42) {
+    const u = (x + 36) / 78;
+    const w = u < 0.3 ? 11 : lerp(11, 1.2, (u - 0.3) / 0.7);
+    const top = lerp(2.5, 0.6, u) - Math.max(0, ay - w + 3) * 0.7;
+    const bot = -lerp(4, 1.2, u) + ay * 0.15;
+    if (ay <= w && z <= top && z >= bot) {
+      if (x < -34.6) p.take(Mat.Dark);
+      else if (z > top - 0.8 && ay < w - 2 && Math.floor(x + 100) % 9 === 0) p.take(Mat.Dark);
+      else if (ay > w - 1 && x > 4 && x < 9) p.take(Mat.Accent);
+      else p.take(z < bot + 1 ? Mat.Dark : Mat.Hull);
+    }
+  }
+  // Superstructure decks and the command tower aft.
+  if (x > -32 && x < 4 && ay <= 5 - Math.max(0, x + 2) * 0.6 && z > 2 && z <= 4.5) p.take(ay > 4.2 ? Mat.Dark : Mat.Hull);
+  if (x > -28 && x < -14 && ay <= 3 && z > 4.5 && z <= 8) p.take(x > -16.5 && z > 6 && z < 7.2 ? Mat.Glass : Mat.Hull);
+  if (x > -25 && x < -23 && ay < 0.5 && z > 8 && z < 10.5) p.take(z > 9.8 ? Mat.Light : Mat.Dark);
+  // Twin-barrelled turrets: two on the spine forward, two pairs on the flanks.
+  for (const [tx, ty, tz] of [[22, 0, 1.1], [11, 0, 1.4], [-6, 7, 1.8], [-22, 7.5, 2.2]] as Vec[]) {
+    const dx = x - tx, dy = ay - ty, dz = z - tz;
+    if (dz >= 0 && dx * dx + dy * dy + dz * dz * 2.2 <= 2.8 * 2.8) p.take(dz > 1.2 ? Mat.Hull : Mat.Dark);
+    if (Math.abs(Math.abs(dy) - 0.8) < 0.4 && dx > 0 && dx < 5 && dz > 0.7 && dz < 1.5) p.take(Mat.Hull);
+  }
+  // Engine block: three big nozzles.
+  for (const ey of [0, 7]) {
+    if (x > -40 && x < -33 && ((ay - ey) ** 2) / (2.6 * 2.6) + ((z + 1) ** 2) / (2.4 * 2.4) <= 1) p.take(x < -38.6 ? Mat.Engine : Mat.Hull);
+  }
+  return p.get();
+};
+
 // ---------------------------------------------------------------- Wisp: interceptor
 const wisp: Shape = (x, y, z) => {
   const ay = Math.abs(y), p = picker();
@@ -130,6 +200,8 @@ interface ShapeSpec { shape: Shape; size: Vec; engines: Vec[]; scale: number }
 export const SHAPES = {
   wisp: { shape: wisp, size: [32, 16, 10], engines: [[-13, 0, 0], [-12.5, -4.6, 0], [-12.5, 4.6, 0]], scale: 1.1 },
   lancer: { shape: lancer, size: [46, 26, 12], engines: [[-20, 0, 0], [-18.5, -6.5, -1], [-18.5, 6.5, -1]], scale: 1.3 },
+  regent: { shape: regent, size: [50, 28, 20], engines: [[-23, 0, 0], [-21.5, -7, -1], [-21.5, 7, -1]], scale: 1.3 },
+  halberd: { shape: halberd, size: [84, 26, 22], engines: [[-40, 0, -1], [-40, -7, -1], [-40, 7, -1]], scale: 1.25 },
   bastion: { shape: bastion, size: [60, 32, 18], engines: [[-27.5, -3, -1], [-27.5, 3, -1], [-27.5, -11, -1], [-27.5, 11, -1]], scale: 1.15 },
   mule: { shape: mule, size: [52, 20, 12], engines: [[-24, -2, 0], [-24, 2, 0]], scale: 1.2 },
 } satisfies Record<string, ShapeSpec>;

@@ -462,3 +462,32 @@ kbd {
   .build { left: calc(-4 * var(--u)); }
   .build-grid { justify-content: center; }
 }
+
+/* Mining mini-game window: the dig canvas on the left, beam controls and finds on the right. */
+.mining-win { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; gap: calc(3 * var(--u)); max-width: calc(100vw - 12 * var(--u)); z-index: 5; }
+.mining-body { display: flex; gap: calc(4 * var(--u)); align-items: flex-start; }
+.mining-view { --bw: calc(2 * var(--u)); --sl: 2; position: relative; padding: calc(2 * var(--u)); line-height: 0; }
+.mining-view canvas { display: block; cursor: none; touch-action: none; }
+.mining-side { width: calc(118 * var(--u)); display: flex; flex-direction: column; gap: calc(3 * var(--u)); font-size: 17px; }
+.mining-side .budget { grid-template-columns: 52px 1fr 44px; }
+.mining-tools { display: flex; gap: calc(2 * var(--u)); }
+.mining-tool { flex: 1; height: calc(15 * var(--u)); }
+.mining-hint { margin: 0; min-height: 2.3em; }
+.mining-side .bad { color: var(--bad); }
+.mining-finds { display: flex; flex-direction: column; gap: calc(1 * var(--u)); }
+.mining-find { display: grid; grid-template-columns: calc(14 * var(--u)) 1fr auto; align-items: center; gap: calc(3 * var(--u)); position: relative; }
+.mining-find img { width: calc(14 * var(--u)); height: calc(14 * var(--u)); image-rendering: pixelated; }
+.mining-find img.lost { filter: grayscale(1) brightness(0.4); }
+.mining-find.lost { color: var(--muted); }
+.mining-find.recovered .num { color: var(--good); }
+.mining-find.lost .num { color: var(--bad); font-size: 11px; }
+.mining-find .num { font-size: 11px; }
+.mining-unknown { width: calc(14 * var(--u)); height: calc(14 * var(--u)); display: grid; place-items: center; color: var(--muted); box-sizing: border-box; }
+.mining-integrity { position: absolute; left: calc(17 * var(--u)); right: 0; bottom: calc(-1 * var(--u)); height: var(--u); background: #04050a; }
+.mining-integrity > div { height: 100%; background: var(--bad); }
+.mining-done { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: calc(3 * var(--u)); padding: calc(6 * var(--u)) calc(10 * var(--u)); line-height: 1.15; }
+.mining-done b { font-size: 24px; }
+.mining-lab { position: relative; height: 100%; background: radial-gradient(#0b101b, #03040a); }
+.mining-lab-bar { position: absolute; left: calc(6 * var(--u)); right: calc(6 * var(--u)); top: calc(4 * var(--u)); display: flex; align-items: center; gap: calc(4 * var(--u)); padding: calc(3 * var(--u)) calc(6 * var(--u)); }
+.mining-lab-bar .pbtn { padding: 0 calc(4 * var(--u)); height: calc(15 * var(--u)); }
+.mining-lab-log { position: absolute; left: 50%; top: 40%; transform: translateX(-50%); display: flex; flex-direction: column; gap: calc(2 * var(--u)); text-shadow: var(--outline); }
