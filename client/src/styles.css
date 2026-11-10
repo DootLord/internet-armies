@@ -25,6 +25,15 @@ b { font-weight: 400; color: var(--hi); }
 .num { font-family: var(--num); font-size: 16px; color: var(--hi); }
 .muted { color: var(--muted); }
 .glyph { display: block; flex: none; }
+.auth-page { min-height: 100%; display: grid; place-items: center; padding: 20px; }
+.auth-form { width: min(100%, 400px); display: grid; gap: 14px; padding: 28px; background: #101725; border: 1px solid #435270; }
+.auth-form h1, .auth-form p { margin: 0; }
+.auth-form label { display: grid; gap: 6px; }
+.auth-form input { width: 100%; padding: 8px; background: #040a14; color: var(--hi); border: 1px solid #435270; font: inherit; user-select: text; }
+.auth-form button, .auth-account button { padding: 6px 12px; border: 1px solid #435270; background: #182539; }
+.auth-form button:disabled, .auth-account button:disabled { opacity: 0.5; cursor: default; }
+.auth-account { position: fixed; bottom: 8px; right: 8px; z-index: 20; padding: 6px; background: #101725; font-size: 15px; }
+.auth-account span { display: block; color: var(--bad); }
 
 .app, .game-host { position: fixed; inset: 0; }
 .game-canvas { width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }

@@ -6,8 +6,12 @@ A persistent, single-shard sci-fi territory builder: every player builds on the 
 
 ```
 client/   React + Vite + TypeScript front end (WebGL2 renderer)
-server/   (next) Node + Express + socket.io authoritative world
+server/   PostgreSQL schema and Node account service
 ```
+
+The `server/` directory currently provides PostgreSQL schema, seed data and an
+email/password account service. It does **not** yet host the game world or
+implement Socket.IO; gameplay remains a separate local prototype.
 
 ## Run the client
 
@@ -18,6 +22,70 @@ npm run dev        # http://localhost:5173
 ```
 
 Deep links: `?at=col,row&zoom=4`, or `?at=f2` to jump to a faction's home.
+
+## Database and accounts (early foundation)
+
+Use PostgreSQL 17 and a dedicated database. Apply these scripts with `psql`; both
+are safe to rerun without resetting existing data:
+
+```sh
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/sql/001_schema.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f server/sql/002_seed.sql
+```
+
+The seed creates the Kestrel sector (matching the local world's seed and radius)
+and a default starter resource template. It does not create accounts, empires,
+spawn points or world ownership. Terrain is generated from the seed; only changed
+tiles are intended to be stored. The schema also reserves tables for structures,
+wallets and sector stockpiles, but no gameplay API reads or writes them yet.
+These scripts bootstrap a new database; `CREATE TABLE IF NOT EXISTS` does not
+upgrade existing tables. Future schema changes need explicit migrations.
+
+Install and start the account service:
+
+```sh
+cd server
+npm ci
+export DATABASE_URL='postgresql://USER:PASSWORD@localhost:5432/internet_armies'
+export SESSION_SECRET="$(node -e "console.log(require('crypto').randomBytes(48).toString('base64'))")"
+export CLIENT_ORIGIN='http://localhost:5173'
+npm start
+```
+
+Use a persistent, randomly generated `SESSION_SECRET` of at least 32 bytes across
+restarts and replicas; keep it and the database URL in secret storage. For local
+development, start the client with `VITE_AUTH_ENABLED=true npm run dev` in
+`client/`. Vite proxies `/api` to port 3000. Without that flag the existing
+local-only experience is unchanged. Register, then sign in; signing in does not
+yet persist or associate the local game with the account.
+
+For deployment, serve the client and `/api` from the same HTTPS origin with a
+reverse proxy routing `/api` to the account service. Build the client with
+`VITE_AUTH_ENABLED=true`, set `NODE_ENV=production` and set `CLIENT_ORIGIN` to
+that exact HTTPS origin. Set `TRUST_PROXY=1` only behind one trusted reverse proxy
+that overwrites forwarded headers; otherwise IP-based throttling can be bypassed.
+For the client Docker image, pass `--build-arg VITE_AUTH_ENABLED=true`. Its
+bundled nginx serves static files only, so the external reverse proxy must route
+`/api` directly to the account service.
+Configure encrypted PostgreSQL connections and certificate verification as
+required by your database provider. Use a restricted database account, backups,
+and monitoring. The `auth_attempts` table retains expired rate-limit buckets;
+schedule periodic deletion of rows with `expires_at < now()`.
+
+**Not production-ready yet:** there is no email verification, password reset,
+account recovery, moderation, distributed abuse protection beyond IP limits, or
+authoritative/persistent game server. Do not expose registration publicly until
+these gaps and deployment security are addressed.
+
+Integration tests require a **disposable** PostgreSQL database whose name ends
+in `_test`, with both SQL scripts applied:
+
+```sh
+cd server
+TEST_DATABASE_URL="$DATABASE_URL" npm test
+```
+
+Without `TEST_DATABASE_URL`, database integration tests are skipped.
 
 ## How rendering works
 

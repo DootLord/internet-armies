@@ -13,10 +13,15 @@ import { ShipStatus } from './ui/ShipStatus';
 import { StorageWindow } from './ui/StorageWindow';
 import { installSkin } from './ui/skin';
 import { TopBar } from './ui/TopBar';
+import { AuthGate } from './ui/AuthGate';
 
 installSkin();
 
 export function App() {
+  return <AuthGate><Game /></AuthGate>;
+}
+
+function Game() {
   const host = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
